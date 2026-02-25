@@ -1,105 +1,85 @@
-import shioaji as sj
-import socketio
-import time
-from datetime import datetime
+"""Trading application entry point.
+
+This module serves as a clean entry point, delegating responsibilities
+to specialized services following SOLID principles.
+"""
+
 from src.utils.config import config
+from src.gateway.gateway_client import GatewayClient, GatewayConfig
+from src.trading.shioaji_client import ShioajiClient, ShioajiConfig
+from src.services.trading_service import TradingService
 
-print(f"Shioaji version: {sj.__version__}")
 
-# Initialize Socket.IO client
-sio = socketio.Client()
-GATEWAY_URL = 'http://localhost:3001'
+def create_gateway_client() -> GatewayClient:
+    """Factory function to create Gateway client.
 
-@sio.event
-def connect():
-    print(f'[{datetime.now()}] Connected to gateway server')
-    sio.emit('python_status', {
-        'status': 'connected',
-        'timestamp': datetime.now().isoformat()
-    })
+    Returns:
+        Configured GatewayClient instance
+    """
+    gateway_config = GatewayConfig(
+        url='http://localhost:3001',
+        reconnection=True
+    )
+    return GatewayClient(gateway_config)
 
-@sio.event
-def disconnect():
-    print(f'[{datetime.now()}] Disconnected from gateway server')
 
-@sio.on('*')
-def catch_all(event, data):
-    """Catch all events from gateway"""
-    print(f'[Gateway] Event "{event}": {data}')
+def create_shioaji_client() -> ShioajiClient:
+    """Factory function to create Shioaji client.
 
-def main():
-    api = None
+    Returns:
+        Configured ShioajiClient instance
+    """
+    shioaji_config = ShioajiConfig(
+        api_key=config.api_key,
+        secret_key=config.secret_key,
+        ca_cert_path=config.ca_cert_path,
+        ca_password=config.ca_password,
+        simulation=True
+    )
+    return ShioajiClient(shioaji_config)
+
+
+def create_trading_service() -> TradingService:
+    """Factory function to create Trading service.
+
+    Returns:
+        Configured TradingService instance
+    """
+    gateway_client = create_gateway_client()
+    shioaji_client = create_shioaji_client()
+
+    return TradingService(
+        gateway_client=gateway_client,
+        shioaji_client=shioaji_client,
+        heartbeat_interval=10
+    )
+
+
+def main() -> None:
+    """Application entry point.
+
+    Creates and starts the trading service with proper error handling.
+    """
+    print("=" * 60)
+    print("Trading Application Starting")
+    print("=" * 60)
+
+    service = create_trading_service()
 
     try:
-        # Connect to gateway
-        print(f'Connecting to gateway at {GATEWAY_URL}...')
-        sio.connect(GATEWAY_URL)
-
-        # Initialize Shioaji API
-        print('Initializing Shioaji API...')
-        api = sj.Shioaji(simulation=True)
-
-        # Login
-        api.login(
-            api_key=config.api_key,
-            secret_key=config.secret_key,
-            fetch_contract=False
-        )
-        print("Shioaji login successful")
-
-        # Activate CA
-        api.activate_ca(
-            ca_path=config.ca_cert_path,
-            ca_passwd=config.ca_password,
-        )
-        print("CA activation successful")
-
-        # Emit success status to gateway
-        sio.emit('shioaji_ready', {
-            'status': 'ready',
-            'timestamp': datetime.now().isoformat(),
-            'simulation': True
-        })
-
-        # Test: Get some contracts
-        contracts = list(api.Contracts.Options.TXO.items())[:3]
-        print(f"Sample contracts: {contracts}")
-
-        # Emit sample data to gateway
-        sio.emit('contracts_loaded', {
-            'count': len(contracts),
-            'sample': str(contracts),
-            'timestamp': datetime.now().isoformat()
-        })
-
-        # Keep the process running
-        print('Main loop started. Press Ctrl+C to exit.')
-        while True:
-            time.sleep(10)
-            # Send heartbeat
-            sio.emit('heartbeat', {
-                'timestamp': datetime.now().isoformat(),
-                'status': 'running'
-            })
-
-    except KeyboardInterrupt:
-        print('\nShutting down...')
+        service.start()
     except Exception as e:
-        print(f'Error: {e}')
-        # Emit error to gateway
-        if sio.connected:
-            sio.emit('python_error', {
-                'error': str(e),
-                'timestamp': datetime.now().isoformat()
-            })
+        print(f"\nFatal error: {e}")
+        return
     finally:
-        # Cleanup
-        if api:
-            print('Logging out from Shioaji...')
-            api.logout()
-        if sio.connected:
-            sio.disconnect()
-        print('Cleanup completed')
+        # Ensure cleanup even on unexpected errors
+        if service.is_running():
+            service.stop()
+
+    print("\n" + "=" * 60)
+    print("Trading Application Stopped")
+    print("=" * 60)
+
 
 if __name__ == "__main__":
     main()
