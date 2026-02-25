@@ -30,3 +30,11 @@ build/
 
 # Cache
 .cache/
+
+# Node.js
+gateway/node_modules/
+gateway/package-lock.json
+node-server-example/
+
+# Claude Code
+.claude/
