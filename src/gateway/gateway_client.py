@@ -37,8 +37,11 @@ class GatewayClient:
         self._client: Optional[socketio.Client] = None
         self._connected = False
 
+        # 設定 logging
+        self._logger = self._setup_logger()
+
     def connect(self) -> None:
-        """Establish connection to gateway server.
+        """Establish connection to gateway server with auto-reconnection.
 
         Raises:
             ConnectionError: If connection fails
@@ -46,15 +49,23 @@ class GatewayClient:
         if self._connected:
             return
 
-        self._client = socketio.Client()
+        # 建立 Socket.IO Client 並啟用自動重連機制
+        self._client = socketio.Client(
+            reconnection=self._config.reconnection,
+            reconnection_attempts=0,  # 無限重試
+            reconnection_delay=1,  # 初始延遲 1 秒
+            reconnection_delay_max=10,  # 最大延遲 10 秒
+            randomization_factor=0.5  # 加入隨機因子避免同時重連
+        )
         self._setup_event_handlers()
 
         try:
+            self._log(f"正在連接到 Gateway: {self._config.url}")
             self._client.connect(self._config.url)
             self._connected = True
-            self._log(f"Connected to gateway at {self._config.url}")
+            self._log(f"已連接到 Gateway: {self._config.url}")
         except Exception as e:
-            raise ConnectionError(f"Failed to connect to gateway: {e}")
+            raise ConnectionError(f"連接 Gateway 失敗: {e}")
 
     def disconnect(self) -> None:
         """Disconnect from gateway server."""
@@ -112,13 +123,13 @@ class GatewayClient:
     def _on_connect(self) -> None:
         """Handle connection event."""
         self._connected = True
-        self._log("Socket.IO connection established")
+        self._logger.info("Socket.IO 連線已建立")
         self.emit('python_status', {'status': 'connected'})
 
     def _on_disconnect(self) -> None:
         """Handle disconnection event."""
         self._connected = False
-        self._log("Socket.IO connection closed")
+        self._logger.warning("Socket.IO 連線已中斷（將自動重連）")
 
     def _on_event(self, event: str, data: Any) -> None:
         """Handle incoming events from gateway.
@@ -129,6 +140,12 @@ class GatewayClient:
         """
         self._log(f"Received event '{event}': {data}")
 
+    def _setup_logger(self):
+        """設定 logger"""
+        import logging
+        logger = logging.getLogger(f"{__name__}.GatewayClient")
+        return logger
+
     def _log(self, message: str, level: str = "info") -> None:
         """Log message with timestamp.
 
@@ -136,12 +153,9 @@ class GatewayClient:
             message: Log message
             level: Log level (info, warning, error)
         """
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        prefix = f"[{timestamp}] [Gateway]"
-
         if level == "error":
-            print(f"{prefix} ERROR: {message}")
+            self._logger.error(message)
         elif level == "warning":
-            print(f"{prefix} WARNING: {message}")
+            self._logger.warning(message)
         else:
-            print(f"{prefix} {message}")
+            self._logger.info(message)

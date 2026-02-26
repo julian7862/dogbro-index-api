@@ -9,6 +9,7 @@ from src.utils.config import config
 from src.gateway.gateway_client import GatewayClient, GatewayConfig
 from src.trading.shioaji_client import ShioajiClient, ShioajiConfig
 from src.services.trading_service import TradingService
+from src.services.market_data_service import MarketDataService
 
 
 class AppFactory:
@@ -88,14 +89,46 @@ class AppFactory:
             heartbeat_interval=heartbeat_interval
         )
 
+    @staticmethod
+    def create_market_data_service(
+        gateway_url: str = None,
+        simulation: bool = True,
+        heartbeat_interval: int = 10,
+        snapshot_interval: int = 5,
+        contract_update_interval: int = 1
+    ) -> MarketDataService:
+        """Create and configure Market Data service with all dependencies.
 
-# Convenience function for common use case
+        Args:
+            gateway_url: Gateway server URL (defaults to GATEWAY_URL env var)
+            simulation: Enable Shioaji simulation mode
+            heartbeat_interval: Heartbeat interval in seconds
+            snapshot_interval: Snapshot polling interval in seconds
+            contract_update_interval: Contract update check interval in seconds
+
+        Returns:
+            Configured MarketDataService instance with injected dependencies
+        """
+        gateway_client = AppFactory.create_gateway_client(url=gateway_url)
+        shioaji_client = AppFactory.create_shioaji_client(simulation=simulation)
+
+        return MarketDataService(
+            gateway_client=gateway_client,
+            shioaji_client=shioaji_client,
+            heartbeat_interval=heartbeat_interval,
+            snapshot_interval=snapshot_interval,
+            contract_update_interval=contract_update_interval
+        )
+
+
+# Convenience functions for common use cases
+
 def create_app(
     gateway_url: str = None,
     simulation: bool = True,
     heartbeat_interval: int = 10
 ) -> TradingService:
-    """Convenience function to create application with default settings.
+    """Convenience function to create trading application with default settings.
 
     Args:
         gateway_url: Gateway server URL (defaults to GATEWAY_URL env var or localhost)
@@ -109,4 +142,37 @@ def create_app(
         gateway_url=gateway_url,
         simulation=simulation,
         heartbeat_interval=heartbeat_interval
+    )
+
+
+def create_market_data_app(
+    gateway_url: str = None,
+    simulation: bool = True,
+    heartbeat_interval: int = 10,
+    snapshot_interval: int = 5,
+    contract_update_interval: int = 1
+) -> MarketDataService:
+    """Convenience function to create market data application with default settings.
+
+    這是主要的市場資料服務，用於：
+    - 從 Shioaji 訂閱期權報價
+    - 動態追蹤價平附近選擇權
+    - 推播即時行情給 Socket Hub
+
+    Args:
+        gateway_url: Gateway server URL (defaults to GATEWAY_URL env var or localhost)
+        simulation: Enable Shioaji simulation mode
+        heartbeat_interval: Heartbeat interval in seconds
+        snapshot_interval: Snapshot polling interval in seconds
+        contract_update_interval: Contract update check interval in seconds
+
+    Returns:
+        Configured MarketDataService ready to start
+    """
+    return AppFactory.create_market_data_service(
+        gateway_url=gateway_url,
+        simulation=simulation,
+        heartbeat_interval=heartbeat_interval,
+        snapshot_interval=snapshot_interval,
+        contract_update_interval=contract_update_interval
     )
