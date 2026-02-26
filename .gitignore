@@ -38,3 +38,11 @@ node-server-example/
 
 # Claude Code
 .claude/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation (if needed)
+# README.md
