@@ -102,7 +102,8 @@ class TestContractManager:
 
     def test_safe_get_contract_not_found(self, manager):
         """測試安全取得合約（找不到）"""
-        options = Mock()
+        # 使用 spec=[] 來創建一個沒有任何屬性的 Mock
+        options = Mock(spec=[])
 
         result = manager._safe_get_contract(options, "TXO99999C")
 

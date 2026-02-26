@@ -109,8 +109,21 @@ class ContractManager:
 
         Returns:
             價平履約價
+
+        範例：
+            - 17850 -> 17900 (50% 往上進位)
+            - 17849 -> 17800 (49% 往下捨去)
+            - 17950 -> 18000 (50% 往上進位)
         """
-        return round(price / self._strike_interval) * self._strike_interval
+        # 計算到最接近的履約價
+        # 當價格正好在兩個履約價中間時（例如 17850），往上進位
+        remainder = price % self._strike_interval
+        if remainder >= self._strike_interval / 2:
+            # 往上進位
+            return int((price // self._strike_interval + 1) * self._strike_interval)
+        else:
+            # 往下捨去
+            return int((price // self._strike_interval) * self._strike_interval)
 
     def _calculate_target_strikes(self, atm_strike: int, range_strikes: int) -> List[int]:
         """計算目標履約價列表
@@ -232,28 +245,29 @@ class ContractManager:
         if not contracts:
             return
 
-        try:
-            # 訂閱 tick 資料
-            self._api.quote.subscribe(
-                self._api.Contracts.Options[contracts[0].code],
-                quote_type=sj.constant.QuoteType.Tick,
-                version=sj.constant.QuoteVersion.v1
-            )
+        # 逐一訂閱每個合約
+        for contract in contracts:
+            try:
+                # 訂閱 tick 資料
+                self._api.quote.subscribe(
+                    contract,
+                    quote_type=sj.constant.QuoteType.Tick
+                )
 
-            # 訂閱委買委賣資料
-            self._api.quote.subscribe(
-                self._api.Contracts.Options[contracts[0].code],
-                quote_type=sj.constant.QuoteType.BidAsk,
-                version=sj.constant.QuoteVersion.v1
-            )
+                # 訂閱委買委賣資料
+                self._api.quote.subscribe(
+                    contract,
+                    quote_type=sj.constant.QuoteType.BidAsk
+                )
 
-            # 記錄訂閱
-            for contract in contracts:
+                # 記錄訂閱
                 self._subscribed_contracts.add(contract.code)
                 logger.debug(f"已訂閱合約: {contract.code}")
 
-        except Exception as e:
-            logger.error(f"訂閱合約時發生錯誤: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"訂閱合約 {contract.code} 時發生錯誤: {e}", exc_info=True)
+                # 繼續訂閱下一個合約
+                continue
 
     def _unsubscribe_contracts(self, contract_codes: Set[str]) -> None:
         """取消訂閱合約

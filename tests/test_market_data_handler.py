@@ -214,7 +214,8 @@ class TestMarketDataHandler:
 
     def test_safe_getattr_missing_attribute(self, handler):
         """測試安全取得不存在的屬性"""
-        obj = Mock()
+        # 使用 spec=[] 創建沒有任何屬性的 Mock
+        obj = Mock(spec=[])
 
         result = handler._safe_getattr(obj, "missing_attr", default="default")
 
@@ -222,10 +223,12 @@ class TestMarketDataHandler:
 
     def test_safe_getattr_with_exception(self, handler):
         """測試取得屬性時發生異常"""
-        obj = Mock()
-        # 模擬 getattr 拋出異常
-        type(obj).test_attr = property(lambda self: 1/0)
+        class ErrorObject:
+            @property
+            def test_attr(self):
+                raise ZeroDivisionError("Test error")
 
+        obj = ErrorObject()
         result = handler._safe_getattr(obj, "test_attr", default="default")
 
         assert result == "default"

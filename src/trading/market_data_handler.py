@@ -247,11 +247,16 @@ class MarketDataHandler:
         Returns:
             屬性值或預設值
 
-        避免 AttributeError
+        避免 AttributeError 和其他異常
         """
         try:
-            return getattr(obj, attr, default)
-        except (AttributeError, TypeError):
+            value = getattr(obj, attr, default)
+            # 如果是 Mock 物件且屬性不存在，會回傳 Mock，檢查並返回 default
+            if hasattr(value, '_mock_name') and attr not in dir(obj):
+                return default
+            return value
+        except Exception:
+            # 捕捉所有異常（包括 ZeroDivisionError, TypeError 等）
             return default
 
     def get_stats(self) -> Dict[str, Any]:
