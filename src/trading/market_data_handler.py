@@ -10,6 +10,7 @@
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
+from decimal import Decimal
 
 from src.gateway.gateway_client import GatewayClient
 from src.trading.contract_manager import ContractManager
@@ -111,6 +112,65 @@ class MarketDataHandler:
             logger.error(f"處理委買委賣資料時發生錯誤: {e}", exc_info=True)
             # 不要 raise，讓程式繼續運行
 
+    def handle_quote(self, exchange: str, quote: Any) -> None:
+        """處理 Quote 資料（包含 tick 和 bidask）
+
+        Args:
+            exchange: 交易所代碼
+            quote: Quote 資料物件（包含完整的 OHLC + BidAsk）
+
+        此方法包含完整的錯誤處理
+        """
+        try:
+            # 提取 Quote 資料
+            quote_data = self._extract_quote_data(exchange, quote)
+
+            if not quote_data:
+                logger.debug("Quote 資料為空，跳過")
+                return
+
+            # 檢查 Socket 連接狀態
+            if not self._gateway.is_connected():
+                logger.debug("Gateway 未連接，無法推送 Quote 資料")
+                return
+
+            # 推播 tick 資料（從 Quote 提取）
+            tick_data = {
+                'exchange': quote_data['exchange'],
+                'code': quote_data['code'],
+                'datetime': quote_data['datetime'],
+                'open': quote_data['open'],
+                'high': quote_data['high'],
+                'low': quote_data['low'],
+                'close': quote_data['close'],
+                'price': quote_data['close'],
+                'volume': quote_data['volume'],
+                'total_volume': quote_data['total_volume'],
+                'timestamp': quote_data['timestamp']
+            }
+            self._gateway.emit('market_tick', tick_data)
+
+            # 推播 bidask 資料（從 Quote 提取）
+            bidask_data = {
+                'exchange': quote_data['exchange'],
+                'code': quote_data['code'],
+                'datetime': quote_data['datetime'],
+                'bid_price': quote_data['bid_price'],
+                'bid_volume': quote_data['bid_volume'],
+                'ask_price': quote_data['ask_price'],
+                'ask_volume': quote_data['ask_volume'],
+                'timestamp': quote_data['timestamp']
+            }
+            self._gateway.emit('market_bidask', bidask_data)
+
+            # 更新最後推送時間
+            contract_code = quote_data.get('code', 'unknown')
+            self._last_tick_time[contract_code] = datetime.now().timestamp()
+            self._last_bidask_time[contract_code] = datetime.now().timestamp()
+
+        except Exception as e:
+            logger.error(f"處理 Quote 資料時發生錯誤: {e}", exc_info=True)
+
     def handle_snapshot(self, snapshots: Any) -> None:
         """處理快照資料
 
@@ -145,11 +205,15 @@ class MarketDataHandler:
         此方法安全地提取資料，避免 AttributeError
         """
         try:
+            # 安全地提取 datetime 並轉換為字串
+            dt = self._safe_getattr(tick, 'datetime')
+            datetime_str = dt.isoformat() if dt and hasattr(dt, 'isoformat') else str(dt) if dt else None
+
             # 安全地提取各個欄位
             data = {
                 'exchange': exchange,
                 'code': self._safe_getattr(tick, 'code'),
-                'datetime': self._safe_getattr(tick, 'datetime'),
+                'datetime': datetime_str,
                 'open': self._safe_getattr(tick, 'open'),
                 'high': self._safe_getattr(tick, 'high'),
                 'low': self._safe_getattr(tick, 'low'),
@@ -182,10 +246,14 @@ class MarketDataHandler:
             整理後的委買委賣資料字典，如果資料無效則返回 None
         """
         try:
+            # 安全地提取 datetime 並轉換為字串
+            dt = self._safe_getattr(bidask, 'datetime')
+            datetime_str = dt.isoformat() if dt and hasattr(dt, 'isoformat') else str(dt) if dt else None
+
             data = {
                 'exchange': exchange,
                 'code': self._safe_getattr(bidask, 'code'),
-                'datetime': self._safe_getattr(bidask, 'datetime'),
+                'datetime': datetime_str,
                 'bid_price': self._safe_getattr(bidask, 'bid_price'),
                 'bid_volume': self._safe_getattr(bidask, 'bid_volume'),
                 'ask_price': self._safe_getattr(bidask, 'ask_price'),
@@ -202,6 +270,57 @@ class MarketDataHandler:
 
         except Exception as e:
             logger.error(f"提取委買委賣資料時發生錯誤: {e}")
+            return None
+
+    def _extract_quote_data(self, exchange: str, quote: Any) -> Optional[Dict[str, Any]]:
+        """從 Quote 物件提取資料
+
+        Args:
+            exchange: 交易所代碼
+            quote: Quote 物件（包含 tick + bidask 所有資料）
+
+        Returns:
+            整理後的 Quote 資料字典
+        """
+        try:
+            # 安全地提取 datetime 並轉換為字串
+            dt = self._safe_getattr(quote, 'datetime')
+            datetime_str = dt.isoformat() if dt and hasattr(dt, 'isoformat') else str(dt) if dt else None
+
+            data = {
+                'exchange': exchange,
+                'code': self._safe_getattr(quote, 'code'),
+                'datetime': datetime_str,
+                # OHLC 資料
+                'open': self._safe_getattr(quote, 'open'),
+                'high': self._safe_getattr(quote, 'high'),
+                'low': self._safe_getattr(quote, 'low'),
+                'close': self._safe_getattr(quote, 'close'),
+                'volume': self._safe_getattr(quote, 'volume'),
+                'total_volume': self._safe_getattr(quote, 'total_volume'),
+                'amount': self._safe_getattr(quote, 'amount'),
+                'total_amount': self._safe_getattr(quote, 'total_amount'),
+                # BidAsk 資料
+                'bid_price': self._safe_getattr(quote, 'bid_price'),
+                'bid_volume': self._safe_getattr(quote, 'bid_volume'),
+                'ask_price': self._safe_getattr(quote, 'ask_price'),
+                'ask_volume': self._safe_getattr(quote, 'ask_volume'),
+                # 額外有用資料
+                'price_chg': self._safe_getattr(quote, 'price_chg'),
+                'pct_chg': self._safe_getattr(quote, 'pct_chg'),
+                'avg_price': self._safe_getattr(quote, 'avg_price'),
+                'underlying_price': self._safe_getattr(quote, 'underlying_price'),
+                'timestamp': datetime.now().isoformat()
+            }
+
+            if not data.get('code'):
+                logger.warning("Quote 資料缺少 code 欄位")
+                return None
+
+            return data
+
+        except Exception as e:
+            logger.error(f"提取 Quote 資料時發生錯誤: {e}")
             return None
 
     def _extract_snapshot_data(self, snapshot: Any) -> Optional[Dict[str, Any]]:
@@ -254,6 +373,12 @@ class MarketDataHandler:
             # 如果是 Mock 物件且屬性不存在，會回傳 Mock，檢查並返回 default
             if hasattr(value, '_mock_name') and attr not in dir(obj):
                 return default
+            # 轉換 Decimal 為 float
+            if isinstance(value, Decimal):
+                return float(value)
+            # 轉換 list 中的 Decimal
+            if isinstance(value, list):
+                return [float(v) if isinstance(v, Decimal) else v for v in value]
             return value
         except Exception:
             # 捕捉所有異常（包括 ZeroDivisionError, TypeError 等）

@@ -14,11 +14,14 @@ import logging
 import threading
 from typing import Optional, Dict, Set, List
 from datetime import datetime
+import shioaji as sj
 
 from src.gateway.gateway_client import GatewayClient
 from src.trading.shioaji_client import ShioajiClient
 from src.trading.contract_manager import ContractManager
 from src.trading.market_data_handler import MarketDataHandler
+from src.data.mongodb_client import MongoDBClient
+from src.utils.strike_calculator import calculate_call_strikes
 
 
 # 設定 logging
@@ -74,6 +77,16 @@ class MarketDataService:
         self._current_index_price: Optional[float] = None
         self._price_lock = threading.Lock()
 
+        # 排程重啟機制
+        self._last_restart_minute: Optional[str] = None
+        self._service_start_time: float = time.time()  # 記錄服務啟動時間
+
+        # MongoDB 客戶端與市場參數
+        self._mongodb_client: Optional[MongoDBClient] = None
+        self._current_futures_month: Optional[str] = None
+        self._current_closing_index: Optional[float] = None
+        self._subscribed_strikes: List[int] = []
+
     def start(self) -> None:
         """啟動市場資料服務
 
@@ -115,7 +128,13 @@ class MarketDataService:
                 contract_manager=self._contract_manager
             )
 
-            # 步驟 5: 設定行情回呼
+            # 步驟 5: 訂閱台指期貨以取得當前價格
+            self._subscribe_index_futures()
+
+            # 步驟 5.5: 從 MongoDB 取得資料並訂閱 TXO 選擇權
+            self._setup_option_subscriptions()
+
+            # 步驟 6: 設定行情回呼
             self._setup_market_callbacks()
 
             # 步驟 6: 發送就緒狀態
@@ -201,23 +220,157 @@ class MarketDataService:
 
         logger.info("環境變數驗證通過")
 
+    def _subscribe_index_futures(self) -> None:
+        """訂閱台指期貨以取得當前指數價格
+
+        優先訂閱 TXFR1 (近月) 和 TXFR2 (次月)
+        """
+        api = self._shioaji.get_api()
+        if not api:
+            return
+
+        try:
+            subscribed_contracts = []
+
+            # 從 TXF 列表中尋找 TXFR1 和 TXFR2
+            txf_contracts = api.Contracts.Futures.TXF
+
+            # 轉換為列表並記錄可用合約（用於除錯）
+            txf_list = list(txf_contracts)
+            available_codes = [c.code for c in txf_list]
+            logger.info(f"可用的 TXF 合約: {', '.join(available_codes[:10])}...")  # 只顯示前 10 個
+
+            # TXF 是 StreamMultiContract，可以迭代
+            for contract in txf_list:
+                if contract.code in ['TXFR1', 'TXFR2']:
+                    try:
+                        # 訂閱 Quote 類型（包含 tick + bidask 所有資料）
+                        api.quote.subscribe(
+                            contract,
+                            quote_type=sj.constant.QuoteType.Quote,
+                            version=sj.constant.QuoteVersion.v1
+                        )
+                        subscribed_contracts.append(contract.code)
+                        logger.info(f"✓ 已訂閱台指期貨 (Quote): {contract.code} - {contract.name} (到期: {contract.delivery_date})")
+                    except Exception as e:
+                        logger.warning(f"訂閱 {contract.code} 失敗: {e}")
+
+            # 如果沒找到 TXFR1/TXFR2，用第一個 TXF 合約作為 fallback
+            if not subscribed_contracts:
+                logger.warning("找不到 TXFR1/TXFR2，使用第一個 TXF 合約")
+                first_contract = list(txf_contracts)[0] if txf_contracts else None
+                if first_contract:
+                    api.quote.subscribe(
+                        first_contract,
+                        quote_type=sj.constant.QuoteType.Quote,
+                        version=sj.constant.QuoteVersion.v1
+                    )
+                    subscribed_contracts.append(first_contract.code)
+                    logger.info(f"✓ 已訂閱台指期貨 (Quote): {first_contract.code} - {first_contract.name}")
+                else:
+                    logger.error("找不到任何可用的台指期貨合約")
+
+            if subscribed_contracts:
+                logger.info(f"總共訂閱 {len(subscribed_contracts)} 個期貨合約: {', '.join(subscribed_contracts)}")
+
+        except Exception as e:
+            logger.error(f"訂閱台指期貨失敗: {e}", exc_info=True)
+
+    def _setup_option_subscriptions(self) -> None:
+        """從 MongoDB 取得資料並訂閱 TXO 選擇權
+
+        此方法在服務啟動時執行一次，功能：
+        1. 連接 MongoDB 並取得市場參數
+        2. 計算 16 個履約價 (ATM 上下各 8 檔)
+        3. 訂閱 TXO CALL 選擇權
+        4. 發送 option_metadata 事件給前端
+        """
+        logger.info("正在設定 TXO 選擇權訂閱...")
+
+        try:
+            # 初始化 MongoDB 客戶端
+            self._mongodb_client = MongoDBClient()
+
+            # 取得市場參數
+            futures_month = self._mongodb_client.get_futures_month()
+            closing_index = self._mongodb_client.get_closing_index()
+
+            if not futures_month:
+                logger.error("無法取得期貨月份")
+                return
+
+            if not closing_index:
+                logger.error("無法取得收盤指數")
+                return
+
+            logger.info(f"期貨月份: {futures_month}, 收盤指數: {closing_index}")
+
+            # 計算 16 個履約價
+            strikes = calculate_call_strikes(closing_index)
+            logger.info(f"計算出 {len(strikes)} 個履約價: {strikes}")
+
+            # 訂閱 TXO CALL 選擇權
+            subscribed_count = self._contract_manager.subscribe_txo_by_month(
+                futures_month=futures_month,
+                strikes=strikes,
+                option_type='call'
+            )
+
+            # 立即取得初始快照（讓前端馬上有 close 值可用）
+            if subscribed_count > 0:
+                logger.info("正在取得 TXO 選擇權初始快照...")
+                subscribed_contracts = self._contract_manager.get_subscribed_contracts()
+                self._fetch_snapshots(subscribed_contracts)
+                logger.info(f"已取得 {len(subscribed_contracts)} 個合約的初始快照")
+
+            # 儲存市場參數供心跳使用
+            self._current_futures_month = futures_month
+            self._current_closing_index = closing_index
+            self._subscribed_strikes = strikes
+
+            # 發送 option_metadata 事件給前端
+            self._gateway.emit('option_metadata', {
+                'futures_month': futures_month,
+                'closing_index': closing_index,
+                'strikes': strikes,
+                'subscribed_count': subscribed_count,
+                'timestamp': datetime.now().isoformat()
+            })
+
+            logger.info(f"TXO 選擇權訂閱完成: {subscribed_count} 個合約")
+
+        except Exception as e:
+            logger.error(f"設定 TXO 選擇權訂閱時發生錯誤: {e}", exc_info=True)
+            self._emit_error(f"TXO 訂閱失敗: {str(e)}")
+
     def _setup_market_callbacks(self) -> None:
         """設定 Shioaji 行情回呼函數"""
         api = self._shioaji.get_api()
         if not api or not self._market_handler:
             return
 
-        # 設定期權 tick 回呼
+        # 設定 Quote 回呼（包含 tick + bidask 所有資料）
+        @api.on_quote_fop_v1()
+        def on_quote(exchange, quote):
+            try:
+                logger.debug(f"收到 Quote: {quote.code}")
+                # 處理 Quote 資料（包含 tick 和 bidask）
+                self._market_handler.handle_quote(exchange, quote)
+                # 更新當前價格（用於動態合約追蹤）
+                self._update_current_price(quote)
+            except Exception as e:
+                logger.error(f"處理 Quote 資料時發生錯誤: {e}", exc_info=True)
+
+        # 設定期權 tick 回呼（當訂閱期權時使用）
         @api.on_tick_fop_v1()
         def on_tick(exchange, tick):
             try:
                 self._market_handler.handle_tick(exchange, tick)
-                # 更新當前價格（用於動態合約追蹤）
                 self._update_current_price(tick)
             except Exception as e:
                 logger.error(f"處理 tick 資料時發生錯誤: {e}", exc_info=True)
 
-        # 設定期權委買委賣回呼
+        # 設定期權委買委賣回呼（當訂閱期權時使用）
         @api.on_bidask_fop_v1()
         def on_bidask(exchange, bidask):
             try:
@@ -320,6 +473,9 @@ class MarketDataService:
                 if current_time % self._heartbeat_interval < 1:
                     self._send_heartbeat()
 
+                # 檢查排程重啟
+                self._check_scheduled_restart()
+
                 # 動態更新合約訂閱（每秒檢查）
                 if current_time - last_contract_update >= self._contract_update_interval:
                     self._ensure_subscriptions()
@@ -358,6 +514,43 @@ class MarketDataService:
         except Exception as e:
             logger.error(f"更新合約訂閱時發生錯誤: {e}", exc_info=True)
 
+    def _check_scheduled_restart(self) -> None:
+        """檢查是否到達排程重啟時間點
+
+        在特定時間點觸發系統重啟，以應對：
+        1. 06:30 - 清晨券商系統洗帳後重啟
+        2. 08:40 - 日盤開盤前重啟
+        3. 14:55 - 夜盤開盤前重啟
+
+        使用 Crash-Only 設計：直接終止進程，由 Docker restart: always 重新啟動
+
+        防止無限重啟：如果服務剛啟動不到 2 分鐘，跳過重啟檢查
+        """
+        # 防止無限重啟：剛啟動的服務不應該立即重啟
+        uptime = time.time() - self._service_start_time
+        if uptime < 120:  # 啟動後 2 分鐘內不檢查重啟
+            return
+
+        now = datetime.now()
+        current_minute = f"{now.hour:02d}:{now.minute:02d}"
+
+        # 定義需要觸發重啟的時間點
+        restart_times = [(6, 30), (8, 40), (14, 55)]
+
+        # 檢查是否符合重啟時間且未在本分鐘內觸發過
+        if (now.hour, now.minute) in restart_times:
+            if self._last_restart_minute != current_minute:
+                logger.warning(
+                    f"🔄 [排程] 觸發系統換盤重啟 (時間: {current_minute})，準備優雅關閉..."
+                )
+                self._last_restart_minute = current_minute
+
+                # 優雅關閉（登出 Shioaji、斷開 Gateway）
+                self.stop()
+
+                # 終止進程，由 Docker 重新啟動
+                sys.exit(0)
+
     def _emit_ready_status(self) -> None:
         """發送就緒狀態給 Gateway"""
         self._gateway.emit('shioaji_ready', {
@@ -378,13 +571,27 @@ class MarketDataService:
             with self._price_lock:
                 current_price = self._current_index_price
 
+            # 同時發送 option_metadata (讓後連線的前端也能收到)
+            option_metadata = {
+                'futures_month': getattr(self, '_current_futures_month', None),
+                'closing_index': getattr(self, '_current_closing_index', None),
+                'strikes': getattr(self, '_subscribed_strikes', []),
+                'subscribed_count': len(self._contract_manager.get_subscribed_contracts()) if self._contract_manager else 0,
+            }
+
             self._gateway.emit('heartbeat', {
                 'status': 'running',
                 'shioaji_connected': self._shioaji.is_connected(),
                 'gateway_connected': self._gateway.is_connected(),
                 'current_price': current_price,
-                'subscribed_contracts': len(self._contract_manager.get_subscribed_contracts()) if self._contract_manager else 0
+                'subscribed_contracts': len(self._contract_manager.get_subscribed_contracts()) if self._contract_manager else 0,
+                'futures_month': self._current_futures_month,
+                'closing_index': self._current_closing_index
             })
+
+            # 每次心跳都發送 option_metadata，確保後連線的前端能收到
+            if option_metadata['futures_month']:
+                self._gateway.emit('option_metadata', option_metadata)
         except Exception as e:
             logger.warning(f"發送心跳失敗: {e}")
 

@@ -106,7 +106,9 @@ class TestMarketDataService:
                 'shioaji_connected': True,
                 'gateway_connected': True,
                 'current_price': None,
-                'subscribed_contracts': 0
+                'subscribed_contracts': 0,
+                'futures_month': None,
+                'closing_index': None
             }
         )
 
@@ -207,3 +209,73 @@ class TestMarketDataService:
         service.stop()
 
         assert not service.is_running()
+
+    @patch('src.services.market_data_service.time')
+    @patch('src.services.market_data_service.datetime')
+    @patch('sys.exit')
+    def test_check_scheduled_restart_trigger(self, mock_exit, mock_datetime, mock_time, service):
+        """測試排程重啟觸發（在指定時間）"""
+        # Mock 時間為 08:40
+        mock_now = Mock()
+        mock_now.hour = 8
+        mock_now.minute = 40
+        mock_datetime.now.return_value = mock_now
+
+        # Mock time.time() 讓 uptime > 120 秒
+        mock_time.time.return_value = service._service_start_time + 200
+
+        # Mock service.stop
+        service.stop = Mock()
+
+        # 執行檢查
+        service._check_scheduled_restart()
+
+        # 驗證 stop 和 exit 都被呼叫
+        service.stop.assert_called_once()
+        mock_exit.assert_called_once_with(0)
+
+    @patch('src.services.market_data_service.datetime')
+    @patch('sys.exit')
+    def test_check_scheduled_restart_ignore(self, mock_exit, mock_datetime, service):
+        """測試排程重啟忽略（非指定時間）"""
+        # Mock 時間為 09:00（非重啟時間）
+        mock_now = Mock()
+        mock_now.hour = 9
+        mock_now.minute = 0
+        mock_datetime.now.return_value = mock_now
+
+        # 執行檢查
+        service._check_scheduled_restart()
+
+        # 驗證 exit 沒有被呼叫
+        mock_exit.assert_not_called()
+
+    @patch('src.services.market_data_service.time')
+    @patch('src.services.market_data_service.datetime')
+    @patch('sys.exit')
+    def test_check_scheduled_restart_no_duplicate_trigger(self, mock_exit, mock_datetime, mock_time, service):
+        """測試同一分鐘內不重複觸發重啟"""
+        # Mock 時間為 06:30
+        mock_now = Mock()
+        mock_now.hour = 6
+        mock_now.minute = 30
+        mock_datetime.now.return_value = mock_now
+
+        # Mock time.time() 讓 uptime > 120 秒
+        mock_time.time.return_value = service._service_start_time + 200
+
+        # Mock service.stop
+        service.stop = Mock()
+
+        # 第一次呼叫應該觸發重啟
+        service._check_scheduled_restart()
+        assert mock_exit.call_count == 1
+
+        # 重置 mock
+        mock_exit.reset_mock()
+        service.stop.reset_mock()
+
+        # 同一分鐘再次呼叫不應該觸發
+        service._check_scheduled_restart()
+        mock_exit.assert_not_called()
+        service.stop.assert_not_called()

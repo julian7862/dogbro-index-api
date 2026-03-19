@@ -41,8 +41,26 @@ services:
     networks:
       - trading-network
     volumes:
-      # 如果需要掛載 CA 憑證，可以取消註解下面這行
-      # - ./certs:/app/certs:ro
+      - /Users/julian/Downloads/ca:/app/ca:ro
+
+  # React Frontend - 市場資料顯示
+  frontend:
+    build:
+      context: ../dogbro-index-client
+      dockerfile: Dockerfile
+    container_name: dogbro-frontend
+    depends_on:
+      - socket-hub
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_GATEWAY_URL=http://localhost:3001
+      - NODE_ENV=development
+    restart: unless-stopped
+    networks:
+      - trading-network
+    stdin_open: true
+    tty: true
 
 networks:
   trading-network:

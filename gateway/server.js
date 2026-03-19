@@ -33,13 +33,53 @@ const io = require("socket.io")(http, {
   }
 });
 
+// 儲存最新狀態
+let latestReadyStatus = null;
+let latestHeartbeat = null;
+let latestOptionMetadata = null;
+let latestSnapshots = {}; // code -> snapshot data
+
 io.on("connection", (socket) => {
   console.log(`[Socket] 客戶端已連線：${socket.id}`);
 
-  /* 轉送所有事件（排除發送者自己） */
+  // 發送最新狀態給新連線的客戶端
+  if (latestReadyStatus) {
+    socket.emit('shioaji_ready', latestReadyStatus);
+    console.log(`[發送快取] shioaji_ready 給 ${socket.id}`);
+  }
+  if (latestHeartbeat) {
+    socket.emit('heartbeat', latestHeartbeat);
+  }
+  if (latestOptionMetadata) {
+    socket.emit('option_metadata', latestOptionMetadata);
+    console.log(`[發送快取] option_metadata 給 ${socket.id}`);
+  }
+  // 發送所有快取的 snapshots
+  const snapshotKeys = Object.keys(latestSnapshots);
+  if (snapshotKeys.length > 0) {
+    console.log(`[發送快取] ${snapshotKeys.length} 個 snapshots 給 ${socket.id}`);
+    snapshotKeys.forEach(code => {
+      socket.emit('market_snapshot', latestSnapshots[code]);
+    });
+  }
+
+  /* 轉送所有事件（廣播給所有客戶端） */
   socket.onAny((event, ...args) => {
     console.log(`[中繼] ${event}:`, args);
-    socket.broadcast.emit(event, ...args);
+
+    // 儲存重要狀態
+    if (event === 'shioaji_ready' && args[0]) {
+      latestReadyStatus = args[0];
+    } else if (event === 'heartbeat' && args[0]) {
+      latestHeartbeat = args[0];
+    } else if (event === 'option_metadata' && args[0]) {
+      latestOptionMetadata = args[0];
+    } else if (event === 'market_snapshot' && args[0]?.code) {
+      latestSnapshots[args[0].code] = args[0];
+    }
+
+    // 使用 io.emit 廣播給所有客戶端（包括發送者）
+    io.emit(event, ...args);
   });
 
   socket.on("disconnect", () => {

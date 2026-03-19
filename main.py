@@ -35,8 +35,11 @@ def main() -> None:
     # 使用 factory 建立應用程式
     # gateway_url 會從 GATEWAY_URL 環境變數讀取（預設：http://localhost:3001）
     # 憑證會從 SJ_KEY, SJ_SEC, CA_CERT_PATH, CA_PASSWORD 環境變數讀取
+    import os
+    simulation = os.getenv('SIMULATION', 'false').lower() == 'true'
+
     service = create_market_data_app(
-        simulation=True,  # 模擬模式
+        simulation=simulation,  # 從環境變數讀取
         heartbeat_interval=10,  # 心跳間隔 10 秒
         snapshot_interval=5,  # 快照輪詢間隔 5 秒
         contract_update_interval=1  # 合約更新檢查間隔 1 秒

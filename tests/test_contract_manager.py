@@ -84,9 +84,10 @@ class TestContractManager:
         assert 'P' in key
 
     def test_safe_get_contract_with_attribute(self, manager):
-        """測試安全取得合約（使用屬性）"""
+        """測試安全取得合約（使用 dict-style 存取）"""
+        # 模擬 api.Contracts.Options.TXO['TXO18000C'] 結構
         options = Mock()
-        options.TXO18000C = "contract_object"
+        options.TXO = {"TXO18000C": "contract_object"}
 
         result = manager._safe_get_contract(options, "TXO18000C")
 

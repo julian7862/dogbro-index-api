@@ -95,6 +95,53 @@ class ContractManager:
             if code in self._contract_cache
         ]
 
+    def subscribe_txo_by_month(
+        self,
+        futures_month: str,
+        strikes: List[int],
+        option_type: str = 'call'
+    ) -> int:
+        """根據期貨月份訂閱 TXO 選擇權
+
+        Args:
+            futures_month: 期貨月份 (格式: YYYYMM，如 202603)
+            strikes: 履約價列表
+            option_type: 選擇權類型 ('call' 或 'put')
+
+        Returns:
+            成功訂閱的合約數量
+        """
+        logger.info(f"開始訂閱 TXO 選擇權: 月份={futures_month}, 履約價數量={len(strikes)}")
+
+        subscribed_count = 0
+        contracts_to_subscribe = []
+
+        try:
+            options = self._api.Contracts.Options
+
+            for strike in strikes:
+                contract_key = self._build_contract_key(strike, option_type, futures_month)
+                contract = self._safe_get_contract(options, contract_key)
+
+                if contract:
+                    contracts_to_subscribe.append(contract)
+                    self._contract_cache[contract.code] = contract
+                    logger.debug(f"找到合約: {contract_key}")
+                else:
+                    logger.warning(f"找不到合約: {contract_key}")
+
+            # 訂閱找到的合約
+            if contracts_to_subscribe:
+                self._subscribe_contracts(contracts_to_subscribe)
+                subscribed_count = len(contracts_to_subscribe)
+
+            logger.info(f"TXO 訂閱完成: 成功 {subscribed_count}/{len(strikes)} 個合約")
+
+        except Exception as e:
+            logger.error(f"訂閱 TXO 選擇權時發生錯誤: {e}", exc_info=True)
+
+        return subscribed_count
+
     def unsubscribe_all(self) -> None:
         """取消所有訂閱"""
         if self._subscribed_contracts:
@@ -199,41 +246,81 @@ class ContractManager:
 
         return contracts
 
-    def _build_contract_key(self, strike: int, option_type: str) -> str:
+    def _build_contract_key(self, strike: int, option_type: str, futures_month: str = None) -> str:
         """建立合約查找鍵
 
         Args:
             strike: 履約價
             option_type: 選擇權類型
+            futures_month: 期貨月份 (格式: YYYYMM，如 202603)
 
         Returns:
-            合約鍵（需要根據實際 API 調整）
+            合約鍵
+            格式: TXO{Strike}{MonthCode}{YearSuffix}
+            範例: TXO33000C6 (March 2026, Strike 33000, Call)
+
+        月份代碼:
+            Call: A=Jan, B=Feb, C=Mar, D=Apr, E=May, F=Jun,
+                  G=Jul, H=Aug, I=Sep, J=Oct, K=Nov, L=Dec
+            Put:  M=Jan, N=Feb, O=Mar, P=Apr, Q=May, R=Jun,
+                  S=Jul, T=Aug, U=Sep, V=Oct, W=Nov, X=Dec
         """
-        # 這裡需要根據實際的 Shioaji 合約命名規則調整
-        # 以下是範例
-        opt_code = 'C' if option_type == 'call' else 'P'
-        # 實際可能需要加上到期月份等資訊
-        return f"TXO{strike}{opt_code}"
+        # 月份代碼對照表
+        call_month_codes = 'ABCDEFGHIJKL'  # 1-12月 Call
+        put_month_codes = 'MNOPQRSTUVWX'   # 1-12月 Put
+
+        if futures_month:
+            # 確保 futures_month 是字串格式
+            futures_month_str = str(futures_month)
+            # 從 YYYYMM 格式解析年份和月份
+            year = int(futures_month_str[:4])
+            month = int(futures_month_str[4:6])
+
+            # 取得月份代碼
+            if option_type == 'call':
+                month_code = call_month_codes[month - 1]
+            else:
+                month_code = put_month_codes[month - 1]
+
+            # 年份後綴 (取最後一位數)
+            year_suffix = str(year)[-1]
+
+            return f"TXO{strike}{month_code}{year_suffix}"
+        else:
+            # Fallback: 舊格式 (不建議使用)
+            opt_code = 'C' if option_type == 'call' else 'P'
+            return f"TXO{strike}{opt_code}"
 
     def _safe_get_contract(self, options, key: str):
         """安全地取得合約，避免 KeyError
 
         Args:
-            options: 選擇權合約物件
-            key: 合約鍵
+            options: 選擇權合約物件 (api.Contracts.Options)
+            key: 合約鍵 (如 TXO33700D6)
 
         Returns:
             合約物件或 None
+
+        存取方式: api.Contracts.Options.TXO['TXO33700D6'] (dict-style)
         """
         try:
-            # 根據實際 API 結構調整
-            if hasattr(options, key):
-                return getattr(options, key)
-            elif isinstance(options, dict) and key in options:
+            # 嘗試透過 TXO 類別以 dict 方式存取
+            if hasattr(options, 'TXO'):
+                txo_contracts = options.TXO
+                try:
+                    return txo_contracts[key]
+                except (KeyError, TypeError):
+                    pass
+
+            # Fallback: 直接以 dict 方式存取
+            try:
                 return options[key]
-            else:
-                return None
-        except (KeyError, AttributeError):
+            except (KeyError, TypeError):
+                pass
+
+            return None
+        except (KeyError, AttributeError) as e:
+            logger.debug(f"取得合約 {key} 時發生錯誤: {e}")
             return None
 
     def _subscribe_contracts(self, contracts: List) -> None:
