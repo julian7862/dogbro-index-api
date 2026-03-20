@@ -140,12 +140,14 @@ class MarketDataService:
             # 步驟 6: 發送就緒狀態
             self._emit_ready_status()
 
-            # 步驟 7: 啟動快照輪詢執行緒
-            self._start_snapshot_thread()
-
-            # 步驟 8: 進入主迴圈
+            # 步驟 7: 設定 running 狀態（必須在啟動 snapshot thread 之前）
             self._running = True
             logger.info("市場資料服務啟動成功")
+
+            # 步驟 8: 啟動快照輪詢執行緒
+            self._start_snapshot_thread()
+
+            # 步驟 9: 進入主迴圈
             self._run_main_loop()
 
         except KeyboardInterrupt:
@@ -158,27 +160,38 @@ class MarketDataService:
             raise
 
     def stop(self) -> None:
-        """優雅地停止服務"""
-        if not self._running:
-            return
+        """優雅地停止服務
 
+        注意：即使 _running 為 False 也要清理已建立的連線，
+        因為 start() 過程中可能在設定 _running=True 之前就發生例外。
+        """
         logger.info("正在停止市場資料服務...")
+
+        # 標記停止（讓執行緒知道要退出）
+        was_running = self._running
         self._running = False
 
-        # 停止快照執行緒
-        if self._snapshot_thread and self._snapshot_thread.is_alive():
+        # 停止快照執行緒（只在曾經啟動過時才等待）
+        if was_running and self._snapshot_thread and self._snapshot_thread.is_alive():
             self._snapshot_thread.join(timeout=5)
 
-        # 取消訂閱（如果需要）
+        # 取消訂閱（如果有）
         if self._contract_manager:
             try:
                 self._contract_manager.unsubscribe_all()
             except Exception as e:
                 logger.error(f"取消訂閱失敗: {e}")
 
-        # 斷開連接
-        self._shioaji.disconnect()
-        self._gateway.disconnect()
+        # 斷開連接（無論 _running 狀態如何都要清理）
+        try:
+            self._shioaji.disconnect()
+        except Exception as e:
+            logger.error(f"Shioaji 斷線失敗: {e}")
+
+        try:
+            self._gateway.disconnect()
+        except Exception as e:
+            logger.error(f"Gateway 斷線失敗: {e}")
 
         logger.info("市場資料服務已停止")
 

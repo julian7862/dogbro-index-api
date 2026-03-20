@@ -41,12 +41,14 @@ services:
     networks:
       - trading-network
     volumes:
-      - /Users/julian/Downloads/ca:/app/ca:ro
+      # CA 憑證路徑：設定 CA_HOST_PATH 環境變數，或使用預設路徑
+      - ${CA_HOST_PATH:-./ca}:/app/ca:ro
 
   # React Frontend - 市場資料顯示
+  # 注意：需要先 clone dogbro-index-client 到同層目錄，或設定 FRONTEND_PATH 環境變數
   frontend:
     build:
-      context: ../dogbro-index-client
+      context: ${FRONTEND_PATH:-../dogbro-index-client}
       dockerfile: Dockerfile
     container_name: dogbro-frontend
     depends_on:
