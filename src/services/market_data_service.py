@@ -22,6 +22,10 @@ from src.trading.contract_manager import ContractManager
 from src.trading.market_data_handler import MarketDataHandler
 from src.data.mongodb_client import MongoDBClient
 from src.utils.strike_calculator import calculate_call_strikes
+from src.utils.trading_hours import is_trading_hours, get_session_name
+from src.indicators.kbar_collector import KBarCollector
+from src.indicators.civ_history import CIVHistory
+from src.indicators.iv_calculator import calc_civ_from_option_quotes, calc_indicator_for_bar
 
 
 # 設定 logging
@@ -48,7 +52,7 @@ class MarketDataService:
         gateway_client: GatewayClient,
         shioaji_client: ShioajiClient,
         heartbeat_interval: int = 10,
-        snapshot_interval: int = 5,
+        snapshot_interval: int = 10,  # 從 5 秒改為 10 秒
         contract_update_interval: int = 1
     ):
         """初始化市場資料服務
@@ -86,6 +90,10 @@ class MarketDataService:
         self._current_futures_month: Optional[str] = None
         self._current_closing_index: Optional[float] = None
         self._subscribed_strikes: List[int] = []
+
+        # 5 分 K 棒收集器與 CIV 歷史 (含 MongoDB 持久化)
+        self._kbar_collector: Optional[KBarCollector] = None
+        self._civ_history: Optional[CIVHistory] = None
 
     def start(self) -> None:
         """啟動市場資料服務
@@ -134,6 +142,11 @@ class MarketDataService:
             # 步驟 5.5: 從 MongoDB 取得資料並訂閱 TXO 選擇權
             self._setup_option_subscriptions()
 
+            # 步驟 5.6: 初始化 K 棒收集器與 CIV 歷史
+            self._kbar_collector = KBarCollector(max_bars=20)
+            self._civ_history = CIVHistory(max_history=50)
+            logger.info(f"K 棒收集器與 CIV 歷史已初始化 (CIV 歷史: {self._civ_history.history_count()} 筆)")
+
             # 步驟 6: 設定行情回呼
             self._setup_market_callbacks()
 
@@ -181,6 +194,20 @@ class MarketDataService:
                 self._contract_manager.unsubscribe_all()
             except Exception as e:
                 logger.error(f"取消訂閱失敗: {e}")
+
+        # 關閉 K 棒收集器的 MongoDB 連線
+        if self._kbar_collector:
+            try:
+                self._kbar_collector.close()
+            except Exception as e:
+                logger.error(f"關閉 KBarCollector 失敗: {e}")
+
+        # 關閉 CIV 歷史的 MongoDB 連線
+        if self._civ_history:
+            try:
+                self._civ_history.close()
+            except Exception as e:
+                logger.error(f"關閉 CIVHistory 失敗: {e}")
 
         # 斷開連接（無論 _running 狀態如何都要清理）
         try:
@@ -423,18 +450,39 @@ class MarketDataService:
         """快照輪詢迴圈（在獨立執行緒中運行）
 
         定期抓取合約快照資料，即使發生錯誤也會繼續執行
+        包含:
+        - 交易時段檢查 (非交易時段跳過)
+        - 更新 K 棒收集器
+        - 檢查 5 分鐘邊界並計算 IV 指標
         """
         while self._running:
             try:
                 time.sleep(self._snapshot_interval)
+
+                # 交易時段檢查
+                if not is_trading_hours():
+                    continue
 
                 if not self._contract_manager:
                     continue
 
                 # 抓取訂閱合約的快照
                 contracts = self._contract_manager.get_subscribed_contracts()
-                if contracts:
-                    self._fetch_snapshots(contracts)
+                if not contracts:
+                    continue
+
+                # 取得快照並更新 K 棒收集器
+                snapshots_data = self._fetch_snapshots_with_data(contracts)
+
+                # 更新 K 棒收集器
+                if self._kbar_collector and snapshots_data:
+                    for code, close in snapshots_data.items():
+                        self._kbar_collector.update_close(code, close)
+
+                    # 檢查是否有新的 5 分 K 棒
+                    new_bar = self._kbar_collector.check_and_record_bar()
+                    if new_bar:
+                        self._on_new_kbar(new_bar)
 
             except Exception as e:
                 # 確保即使快照失敗，執行緒也能繼續運行
@@ -464,6 +512,135 @@ class MarketDataService:
 
         except Exception as e:
             logger.error(f"批次抓取快照失敗: {e}")
+
+    def _fetch_snapshots_with_data(self, contracts: List) -> Dict[str, float]:
+        """抓取合約快照並回傳 close 資料
+
+        Args:
+            contracts: 合約列表
+
+        Returns:
+            {contract_code: close} 字典
+        """
+        api = self._shioaji.get_api()
+        if not api:
+            return {}
+
+        result = {}
+        try:
+            for contract in contracts:
+                try:
+                    snapshot = api.snapshots([contract])
+                    if snapshot and self._market_handler:
+                        self._market_handler.handle_snapshot(snapshot)
+                        # 提取 close 價格
+                        if hasattr(snapshot[0], 'close') and snapshot[0].close:
+                            result[contract.code] = float(snapshot[0].close)
+                except Exception as e:
+                    logger.warning(f"抓取合約 {contract.code} 快照失敗: {e}")
+                    continue
+        except Exception as e:
+            logger.error(f"批次抓取快照失敗: {e}")
+
+        return result
+
+    def _on_new_kbar(self, bar_closes: Dict[str, float]) -> None:
+        """處理新的 5 分 K 棒
+
+        Args:
+            bar_closes: {contract_code: close} 字典
+        """
+        # 1. 發送 kbar_close 事件到前端 (含 bar counts)
+        bar_counts = self._kbar_collector.get_bar_counts() if self._kbar_collector else {}
+        self._gateway.emit('kbar_close', {
+            'timestamp': datetime.now().isoformat(),
+            'closes': bar_closes,
+            'bar_counts': bar_counts
+        })
+        logger.info(f"發送 kbar_close 事件: {len(bar_closes)} 個合約")
+
+        # 2. 計算 IV 指標
+        if not self._civ_history or not self._subscribed_strikes:
+            return
+
+        dte = self._calculate_dte()
+        if dte <= 0:
+            logger.warning("DTE <= 0，跳過 IV 計算")
+            return
+
+        # 取得標的價格 (使用收盤指數)
+        underlying_price = self._current_closing_index
+        if not underlying_price:
+            logger.warning("無收盤指數，跳過 IV 計算")
+            return
+
+        # 計算 CIV
+        civ = calc_civ_from_option_quotes(
+            bar_closes,
+            self._subscribed_strikes,
+            underlying_price,
+            dte
+        )
+
+        if civ is None:
+            logger.warning("無法計算 CIV (可能選擇權資料不足)")
+            return
+
+        logger.info(f"計算 CIV: {civ * 100:.2f}%")
+
+        # 從 CIVHistory 取得歷史
+        civ_hist, price_hist = self._civ_history.get_history()
+
+        # 計算完整指標
+        result = calc_indicator_for_bar(
+            civ=civ,
+            civ_history=civ_hist,
+            price=underlying_price,
+            price_history=price_hist,
+            period=20
+        )
+
+        # 儲存到 MongoDB (CIVHistory 會自動保留最近 50 筆)
+        self._civ_history.add(civ, underlying_price)
+
+        # 發送 IV 指標事件
+        if result:
+            self._gateway.emit('iv_indicator', {
+                'civ': result.civ,
+                'civ_pb': result.civ_pb,
+                'price_pb': result.price_pb,
+                'signal': result.signal,
+                'timestamp': result.timestamp
+            })
+            logger.info(f"發送 iv_indicator: CIV={result.civ*100:.2f}%, Signal={result.signal:.4f}")
+        else:
+            logger.info(f"歷史資料不足 ({len(civ_hist)+1}/20)，尚無法計算 Bollinger %b")
+
+    def _calculate_dte(self) -> float:
+        """計算距到期天數
+
+        Returns:
+            距到期天數 (至少 1 天)
+        """
+        if not self._mongodb_client:
+            return 0
+
+        try:
+            expiration_date = self._mongodb_client.get_expiration_date()
+            if not expiration_date:
+                return 0
+
+            today = datetime.now().date()
+
+            # expiration_date 格式: YYYYMMDD (int)
+            exp_str = str(expiration_date)
+            exp_date = datetime.strptime(exp_str, '%Y%m%d').date()
+
+            delta = (exp_date - today).days
+            return max(delta, 1)  # 至少 1 天，避免除零
+        except Exception as e:
+            logger.error(f"計算 DTE 失敗: {e}")
+            return 0
 
     def _run_main_loop(self) -> None:
         """執行主事件迴圈

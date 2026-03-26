@@ -38,6 +38,8 @@ let latestReadyStatus = null;
 let latestHeartbeat = null;
 let latestOptionMetadata = null;
 let latestSnapshots = {}; // code -> snapshot data
+let latestKbarClose = null; // 最新 5 分 K 收盤
+let latestIVIndicator = null; // 最新 IV 指標
 
 io.on("connection", (socket) => {
   console.log(`[Socket] 客戶端已連線：${socket.id}`);
@@ -62,6 +64,16 @@ io.on("connection", (socket) => {
       socket.emit('market_snapshot', latestSnapshots[code]);
     });
   }
+  // 發送快取的 kbar_close
+  if (latestKbarClose) {
+    socket.emit('kbar_close', latestKbarClose);
+    console.log(`[發送快取] kbar_close 給 ${socket.id}`);
+  }
+  // 發送快取的 iv_indicator
+  if (latestIVIndicator) {
+    socket.emit('iv_indicator', latestIVIndicator);
+    console.log(`[發送快取] iv_indicator 給 ${socket.id}`);
+  }
 
   /* 轉送所有事件（廣播給所有客戶端） */
   socket.onAny((event, ...args) => {
@@ -76,6 +88,10 @@ io.on("connection", (socket) => {
       latestOptionMetadata = args[0];
     } else if (event === 'market_snapshot' && args[0]?.code) {
       latestSnapshots[args[0].code] = args[0];
+    } else if (event === 'kbar_close' && args[0]) {
+      latestKbarClose = args[0];
+    } else if (event === 'iv_indicator' && args[0]) {
+      latestIVIndicator = args[0];
     }
 
     // 使用 io.emit 廣播給所有客戶端（包括發送者）
