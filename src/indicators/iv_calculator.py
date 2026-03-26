@@ -13,6 +13,7 @@ XQ 相容說明:
 """
 
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -42,33 +43,50 @@ class IndicatorResult:
     timestamp: str                  # 計算時間 ISO 格式
 
 
-def _norm_cdf(x: float) -> float:
-    """標準常態分佈累積分佈函數（不依賴 scipy）
+def _norm_cdf(z: float) -> float:
+    """標準常態分佈累積分佈函數（XQ NormSDist 相容版本）
 
-    使用 Abramowitz and Stegun 近似公式。
-    本次優先目標是行為對齊 XQ，不是數值最佳化，
-    因此保留此近似實作而不引入 scipy。
+    此函數完全對齊 XQ NormSDist 的多項式近似公式，
+    不使用 scipy，以確保與 XQ 計算結果一致。
+
+    變數命名對齊 XQ 原始碼：
+    - value1 = 1 / (1 + gamma * |z|)
+    - value2 = exp(-z²/2) / sqrt(2π)
+    - value3 = 1 - value2 * poly(value1)
 
     Args:
-        x: 標準常態分佈的 z 值
+        z: 標準常態分佈的 z 值
 
     Returns:
-        累積機率值
+        累積機率值 P(Z <= z)
     """
-    a1 = 0.254829592
-    a2 = -0.284496736
-    a3 = 1.421413741
-    a4 = -1.453152027
-    a5 = 1.061405429
-    p = 0.3275911
+    # XQ NormSDist 多項式係數
+    a1 = 0.31938153
+    a2 = -0.356563782
+    a3 = 1.781477937
+    a4 = -1.821255978
+    a5 = 1.330274429
+    sqrtof2pi = 2.506628275
+    gamma = 0.2316419
 
-    sign = 1 if x >= 0 else -1
-    x = abs(x)
+    # 對 abs(z) 做近似
+    abs_z = abs(z)
 
-    t = 1.0 / (1.0 + p * x)
-    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x / 2)
+    # value1: 對齊 XQ 的 1 / (1 + gamma * AbsValue(zvalue))
+    value1 = 1.0 / (1.0 + gamma * abs_z)
 
-    return 0.5 * (1.0 + sign * y)
+    # value2: 對齊 XQ 的 ExpValue(-Square(zvalue) * 0.5) / sqrtof2pi
+    value2 = math.exp(-0.5 * abs_z * abs_z) / sqrtof2pi
+
+    # value3: 對齊 XQ 的 Horner 展開式
+    # XQ: 1 - value2 * (((((a5*value1+a4)*value1+a3)*value1+a2)*value1+a1)*value1)
+    value3 = 1.0 - value2 * (((((a5 * value1 + a4) * value1 + a3) * value1 + a2) * value1 + a1) * value1)
+
+    # 若 z < 0，利用對稱性回傳 1 - value3
+    if z < 0:
+        return 1.0 - value3
+    else:
+        return value3
 
 
 def _bs_call_price(S: float, K: float, T: float, r: float, sigma: float) -> float:
@@ -309,35 +327,114 @@ def build_sma_series(values: List[float], period: int) -> List[Optional[float]]:
     return result
 
 
+def calc_variance_ps(values: List[float], period: int, data_type: int = 1) -> Optional[float]:
+    """計算變異數（對齊 XQ VariancePS）
+
+    對齊 XQ VariancePS(thePrice, Length, DataType) 的行為。
+
+    XQ 原始邏輯：
+    - Period = Iff(DataType = 1, Length, Length - 1)
+    - avg = Average(thePrice, Length)
+    - sum = Σ(thePrice[i] - avg)²
+    - VariancePS = sum / Period
+
+    Args:
+        values: 數值列表
+        period: 計算週期（對應 XQ 的 Length）
+        data_type: 分母類型
+            - data_type=1: 分母 = period（母體變異數）
+            - data_type!=1: 分母 = period - 1（樣本變異數）
+
+    Returns:
+        變異數，若資料不足或分母為零則回傳 None
+    """
+    if period <= 0:
+        return None
+
+    if len(values) < period:
+        return None
+
+    # 取最近 period 筆資料
+    recent = values[-period:]
+
+    # 計算平均（對齊 XQ Average）
+    avg = sum(recent) / period
+
+    # 計算平方差總和
+    sum_sq = sum((x - avg) ** 2 for x in recent)
+
+    # 分母規則對齊 XQ: Iff(DataType = 1, Length, Length - 1)
+    period_divisor = period if data_type == 1 else period - 1
+
+    if period_divisor <= 0:
+        return None
+
+    return sum_sq / period_divisor
+
+
+def calc_standard_dev(values: List[float], period: int, data_type: int = 1) -> Optional[float]:
+    """計算標準差（對齊 XQ StandardDev）
+
+    對齊 XQ StandardDev(thePrice, Length, DataType) 的行為。
+
+    XQ 原始邏輯：
+    - Value1 = VariancePS(thePrice, Length, DataType)
+    - if Value1 > 0 then StandardDev = SquareRoot(Value1) else StandardDev = 0
+
+    BollingerBand 使用 data_type=1（母體標準差）。
+
+    Args:
+        values: 數值列表
+        period: 計算週期
+        data_type: 變異數分母類型（傳遞給 calc_variance_ps）
+
+    Returns:
+        標準差，若變異數為 None 則回傳 None，若變異數 <= 0 則回傳 0.0
+    """
+    variance = calc_variance_ps(values, period, data_type)
+
+    if variance is None:
+        return None
+
+    if variance <= 0:
+        return 0.0
+
+    return math.sqrt(variance)
+
+
 def calc_bollinger_band(
     values: List[float],
     period: int = 20,
-    std_dev: float = 2.0
+    band: float = 2.0
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-    """計算 Bollinger Band
+    """計算 Bollinger Band（對齊 XQ BollingerBand）
 
-    使用母體標準差（population standard deviation），
-    即除以 N 而非 N-1。若未來要更貼近特定平台實作，可再調整。
+    對齊 XQ BollingerBand(price, length, _band) 的行為：
+    - 中軌 = Average(price, length)
+    - 標準差 = StandardDev(price, length, 1)  # data_type=1 為母體標準差
+    - 上軌 = 中軌 + _band * 標準差
+    - 下軌 = 中軌 - _band * 標準差
 
     Args:
         values: 歷史數值列表
-        period: 計算週期（預設 20）
-        std_dev: 標準差倍數（預設 2）
+        period: 計算週期（預設 20，對應 XQ 的 length）
+        band: 標準差倍數（預設 2，對應 XQ 的 _band）
 
     Returns:
         (middle, upper, lower) 或 (None, None, None) 若資料不足
     """
-    if len(values) < period:
+    # 使用 calc_simple_moving_average 計算中軌（對齊 XQ Average）
+    middle = calc_simple_moving_average(values, period)
+    if middle is None:
         return None, None, None
 
-    recent = values[-period:]
-    middle = sum(recent) / period
-    # 使用母體標準差（除以 N）
-    variance = sum((x - middle) ** 2 for x in recent) / period
-    std = math.sqrt(variance)
+    # 使用 calc_standard_dev 計算標準差（對齊 XQ StandardDev，data_type=1）
+    std = calc_standard_dev(values, period, data_type=1)
+    if std is None:
+        return None, None, None
 
-    upper = middle + std_dev * std
-    lower = middle - std_dev * std
+    upper = middle + band * std
+    lower = middle - band * std
 
     return middle, upper, lower
 
@@ -367,6 +464,69 @@ def calc_percent_b(value: float, upper: float, lower: float) -> float:
     return (value - lower) / (upper - lower) * 100.0
 
 
+def extract_strike_from_code(code: str) -> Optional[int]:
+    """從選擇權合約代碼中提取履約價
+
+    支援 TXO 格式: TXO{strike}{month_code}{year}
+    例如: TXO33000D6 -> 33000
+
+    不再使用 substring matching，改用 regex 明確提取。
+
+    Args:
+        code: 合約代碼字串
+
+    Returns:
+        履約價整數，若無法解析則回傳 None
+    """
+    # TXO 格式: TXO 後接連續數字為履約價，接著是月份代碼和年份
+    # 例如: TXO33000D6, TXO22500C6
+    match = re.match(r'^TXO(\d+)[A-Z]\d+$', code.upper())
+    if match:
+        return int(match.group(1))
+
+    # 備用: 嘗試提取 TXO 後的連續數字
+    match = re.search(r'TXO(\d+)', code.upper())
+    if match:
+        return int(match.group(1))
+
+    return None
+
+
+def build_strike_price_map(option_closes: Dict[str, float]) -> Dict[int, float]:
+    """建立履約價到選擇權價格的對應表
+
+    使用 extract_strike_from_code() 從合約代碼提取履約價，
+    建立結構化的 {strike: price} mapping。
+
+    不再使用 substring matching (str(strike) in code)。
+
+    Args:
+        option_closes: 各合約的選擇權收盤價 {contract_code: close}
+
+    Returns:
+        {strike: price} 對應表
+
+    Note:
+        若同一 strike 對應多個 code，取第一個有效值（price > 0）
+    """
+    strike_price_map: Dict[int, float] = {}
+
+    for code, price in option_closes.items():
+        strike = extract_strike_from_code(code)
+        if strike is None:
+            continue
+
+        # 若此 strike 尚未有對應值，或目前值無效但新值有效，則更新
+        if strike not in strike_price_map:
+            if price and price > 0:
+                strike_price_map[strike] = price
+        # 若已有值但為 0，而新值有效，則覆蓋
+        elif strike_price_map[strike] <= 0 and price and price > 0:
+            strike_price_map[strike] = price
+
+    return strike_price_map
+
+
 def calc_civ_from_option_quotes(
     option_closes: Dict[str, float],
     strikes: List[int],
@@ -378,6 +538,10 @@ def calc_civ_from_option_quotes(
     """從選擇權報價計算平均 CIV（XQ 相容版本）
 
     回傳值為百分比值（例如 23.5 代表 23.5%）。
+
+    履約價對應方式：
+    - 使用 build_strike_price_map() 建立結構化 mapping
+    - 不再使用 substring matching (str(strike) in code)
 
     過濾規則：
     - 排除 IV = 0（輸入無效）
@@ -397,13 +561,12 @@ def calc_civ_from_option_quotes(
     """
     ivs = []
 
+    # 使用結構化 mapping 取代 substring matching
+    strike_price_map = build_strike_price_map(option_closes)
+
     for strike in strikes:
-        # 找到對應的合約
-        close = None
-        for code, price in option_closes.items():
-            if str(strike) in code:
-                close = price
-                break
+        # 使用 .get() 取得對應價格，若無對應則為 None
+        close = strike_price_map.get(strike)
 
         if close and close > 0:
             iv = implied_volatility(

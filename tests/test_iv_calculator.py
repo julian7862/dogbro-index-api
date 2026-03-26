@@ -13,7 +13,11 @@ from src.indicators.iv_calculator import (
     calc_civ_from_option_quotes,
     calc_indicator_for_bar,
     calc_simple_moving_average,
+    calc_variance_ps,
+    calc_standard_dev,
     build_sma_series,
+    extract_strike_from_code,
+    build_strike_price_map,
     IndicatorResult,
     _bs_call_price,
     _bs_call_price_xq,
@@ -249,10 +253,10 @@ class TestBollingerBand:
         assert lower == 100
 
     def test_uses_population_std(self):
-        """使用母體標準差（除以 N）"""
+        """使用母體標準差（除以 N）- 對齊 XQ data_type=1"""
         # 簡單驗證：使用已知數據
         values = [2, 4, 4, 4, 5, 5, 7, 9]  # 8 個值
-        middle, upper, lower = calc_bollinger_band(values, period=8, std_dev=1.0)
+        middle, upper, lower = calc_bollinger_band(values, period=8, band=1.0)
 
         # 平均 = 5, 母體標準差 = 2
         assert middle == 5.0
@@ -493,6 +497,202 @@ class TestCalcIndicatorForBar:
 
         assert result is not None
         assert result.pb_minus_civ_pb == result.price_pb - result.civ_pb
+
+
+class TestVariancePS:
+    """測試 XQ 相容 VariancePS 函數"""
+
+    def test_population_variance(self):
+        """Scenario: 母體變異數 (data_type=1)
+        WHEN values=[1,2,3,4,5], period=5, data_type=1
+        THEN 回傳值 SHALL 為 2.0
+        """
+        result = calc_variance_ps([1, 2, 3, 4, 5], 5, data_type=1)
+        assert result == 2.0
+
+    def test_sample_variance(self):
+        """Scenario: 樣本變異數 (data_type=2)
+        WHEN values=[1,2,3,4,5], period=5, data_type=2
+        THEN 回傳值 SHALL 為 2.5
+        """
+        result = calc_variance_ps([1, 2, 3, 4, 5], 5, data_type=2)
+        assert result == 2.5
+
+    def test_insufficient_data(self):
+        """Scenario: 資料不足
+        WHEN values 長度 < period
+        THEN 回傳值 SHALL 為 None
+        """
+        result = calc_variance_ps([1, 2, 3], 5)
+        assert result is None
+
+    def test_zero_period(self):
+        """Scenario: 週期為零或負
+        WHEN period <= 0
+        THEN 回傳值 SHALL 為 None
+        """
+        assert calc_variance_ps([1, 2, 3, 4, 5], 0) is None
+        assert calc_variance_ps([1, 2, 3, 4, 5], -1) is None
+
+    def test_default_data_type(self):
+        """預設 data_type=1（母體變異數）"""
+        result = calc_variance_ps([1, 2, 3, 4, 5], 5)
+        assert result == 2.0  # 與 data_type=1 相同
+
+    def test_takes_recent_values(self):
+        """只取最後 period 筆資料"""
+        # 最後 5 筆: 6,7,8,9,10 平均=8，母體變異數=2
+        result = calc_variance_ps([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 5)
+        assert result == 2.0
+
+
+class TestStandardDev:
+    """測試 XQ 相容 StandardDev 函數"""
+
+    def test_population_std(self):
+        """Scenario: 母體標準差 (data_type=1)
+        使用已知數據: [2,4,4,4,5,5,7,9] 平均=5, 母體標準差=2
+        """
+        result = calc_standard_dev([2, 4, 4, 4, 5, 5, 7, 9], 8, data_type=1)
+        assert result == 2.0
+
+    def test_sample_std(self):
+        """Scenario: 樣本標準差 (data_type=2)
+        [1,2,3,4,5] 平均=3, 樣本變異數=2.5, 樣本標準差=sqrt(2.5)
+        """
+        result = calc_standard_dev([1, 2, 3, 4, 5], 5, data_type=2)
+        assert abs(result - math.sqrt(2.5)) < 0.0001
+
+    def test_insufficient_data(self):
+        """資料不足"""
+        result = calc_standard_dev([1, 2, 3], 5)
+        assert result is None
+
+    def test_zero_variance(self):
+        """所有值相同時標準差為 0"""
+        result = calc_standard_dev([5, 5, 5, 5, 5], 5)
+        assert result == 0.0
+
+    def test_is_sqrt_of_variance(self):
+        """標準差 = sqrt(變異數)"""
+        values = [1, 2, 3, 4, 5]
+        variance = calc_variance_ps(values, 5, data_type=1)
+        std = calc_standard_dev(values, 5, data_type=1)
+        assert std == math.sqrt(variance)
+
+
+class TestExtractStrikeFromCode:
+    """測試從合約代碼提取履約價"""
+
+    def test_standard_format(self):
+        """Scenario: 標準格式 TXO{strike}{month_code}{year}
+        WHEN code='TXO33000D6'
+        THEN 回傳值 SHALL 為 33000
+        """
+        assert extract_strike_from_code('TXO33000D6') == 33000
+
+    def test_various_strikes(self):
+        """測試不同履約價"""
+        assert extract_strike_from_code('TXO22000D6') == 22000
+        assert extract_strike_from_code('TXO22500D6') == 22500
+        assert extract_strike_from_code('TXO34500D6') == 34500
+
+    def test_different_months(self):
+        """測試不同月份代碼"""
+        assert extract_strike_from_code('TXO22000A6') == 22000  # 1月 Call
+        assert extract_strike_from_code('TXO22000L6') == 22000  # 12月 Call
+
+    def test_lowercase_input(self):
+        """測試小寫輸入"""
+        assert extract_strike_from_code('txo22000d6') == 22000
+
+    def test_invalid_format(self):
+        """Scenario: 無效格式
+        WHEN code 不符合 TXO 格式
+        THEN 回傳值 SHALL 為 None
+        """
+        assert extract_strike_from_code('INVALID') is None
+        assert extract_strike_from_code('') is None
+        assert extract_strike_from_code('TX22000D6') is None  # 缺少 O
+
+    def test_partial_match(self):
+        """部分匹配也能提取"""
+        # 若格式不完全符合但含有 TXO 和數字，仍嘗試提取
+        assert extract_strike_from_code('TXO22000') == 22000
+
+
+class TestBuildStrikePriceMap:
+    """測試建立履約價對應表"""
+
+    def test_standard_mapping(self):
+        """Scenario: 標準對應
+        WHEN option_closes 包含多個合約
+        THEN 回傳 {strike: price} 對應表
+        """
+        option_closes = {
+            'TXO22000D6': 500.0,
+            'TXO22100D6': 400.0,
+            'TXO22200D6': 300.0,
+        }
+        result = build_strike_price_map(option_closes)
+
+        assert result[22000] == 500.0
+        assert result[22100] == 400.0
+        assert result[22200] == 300.0
+
+    def test_first_valid_price_wins(self):
+        """若同履約價重複，取第一個有效值"""
+        option_closes = {
+            'TXO22000D6': 500.0,
+            'TXO22000E6': 450.0,  # 同履約價不同月份
+        }
+        result = build_strike_price_map(option_closes)
+
+        # 應該是第一個有效值（取決於 dict 迭代順序，Python 3.7+ 保持插入順序）
+        assert 22000 in result
+        assert result[22000] == 500.0
+
+    def test_skips_invalid_codes(self):
+        """跳過無法解析的合約代碼"""
+        option_closes = {
+            'TXO22000D6': 500.0,
+            'INVALID': 999.0,
+            'TXO22100D6': 400.0,
+        }
+        result = build_strike_price_map(option_closes)
+
+        assert 22000 in result
+        assert 22100 in result
+        assert len(result) == 2
+
+    def test_skips_zero_or_negative_price(self):
+        """跳過零或負價格"""
+        option_closes = {
+            'TXO22000D6': 0,
+            'TXO22100D6': -100.0,
+            'TXO22200D6': 300.0,
+        }
+        result = build_strike_price_map(option_closes)
+
+        assert 22000 not in result
+        assert 22100 not in result
+        assert 22200 in result
+        assert result[22200] == 300.0
+
+    def test_empty_input(self):
+        """空輸入回傳空 dict"""
+        result = build_strike_price_map({})
+        assert result == {}
+
+    def test_replaces_invalid_with_valid(self):
+        """若第一個值無效，後續有效值會取代"""
+        option_closes = {
+            'TXO22000D6': 0,       # 無效
+            'TXO22000E6': 500.0,   # 有效，應取代
+        }
+        result = build_strike_price_map(option_closes)
+
+        assert result[22000] == 500.0
 
 
 class TestDeprecatedFunctions:
