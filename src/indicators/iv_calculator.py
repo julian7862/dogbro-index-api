@@ -73,20 +73,18 @@ def implied_volatility(
     underlying_price: float,
     strike: float,
     dte: float,
-    risk_free_rate: float = 0.01,
-    option_type: str = 'call'
+    risk_free_rate: float = 0.01
 ) -> Optional[float]:
-    """使用 Black-Scholes 模型反推隱含波動率
+    """使用 Black-Scholes 模型反推 Call 選擇權隱含波動率
 
     使用 Newton-Raphson 方法迭代求解
 
     Args:
-        option_price: 選擇權價格
+        option_price: Call 選擇權價格
         underlying_price: 標的價格 (台指期貨價格或現貨指數)
         strike: 履約價
         dte: 距到期天數
         risk_free_rate: 無風險利率 (預設 1%)
-        option_type: 'call' 或 'put'
 
     Returns:
         隱含波動率 (0.0 ~ 2.0 範圍)，計算失敗回傳 None
@@ -100,8 +98,8 @@ def implied_volatility(
     r = risk_free_rate
     C_market = option_price
 
-    # 內在價值檢查
-    intrinsic = max(0, S - K) if option_type == 'call' else max(0, K - S)
+    # 內在價值檢查 (Call)
+    intrinsic = max(0, S - K)
     if C_market < intrinsic:
         return None
 

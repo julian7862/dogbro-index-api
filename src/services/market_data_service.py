@@ -22,7 +22,7 @@ from src.trading.contract_manager import ContractManager
 from src.trading.market_data_handler import MarketDataHandler
 from src.data.mongodb_client import MongoDBClient
 from src.utils.strike_calculator import calculate_call_strikes
-from src.utils.trading_hours import is_trading_hours, get_session_name
+from src.utils.trading_hours import is_trading_hours, get_session_name, TW_TZ
 from src.indicators.kbar_collector import KBarCollector
 from src.indicators.civ_history import CIVHistory
 from src.indicators.iv_calculator import calc_civ_from_option_quotes, calc_indicator_for_bar
@@ -617,7 +617,7 @@ class MarketDataService:
             logger.info(f"歷史資料不足 ({len(civ_hist)+1}/20)，尚無法計算 Bollinger %b")
 
     def _calculate_dte(self) -> float:
-        """計算距到期天數
+        """計算距到期天數（使用台灣時區）
 
         Returns:
             距到期天數 (至少 1 天)
@@ -630,7 +630,8 @@ class MarketDataService:
             if not expiration_date:
                 return 0
 
-            today = datetime.now().date()
+            # 使用台灣時區日期，避免 UTC 時差導致 off-by-one
+            today = datetime.now(TW_TZ).date()
 
             # expiration_date 格式: YYYYMMDD (int)
             exp_str = str(expiration_date)

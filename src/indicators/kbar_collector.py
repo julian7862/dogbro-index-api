@@ -130,12 +130,20 @@ class KBarCollector:
     def check_and_record_bar(self) -> Optional[Dict[str, float]]:
         """檢查是否到達 5 分鐘邊界，若是則記錄 K 棒並存入 MongoDB
 
+        只在整 5 分鐘的容忍範圍內（秒數 0-10）記錄，確保記錄的是收盤價
+
         Returns:
             若有新 K 棒則回傳 {contract_code: close}，否則 None
         """
         now = datetime.now()
+
+        # 只在 5 分鐘邊界的容忍範圍內記錄
+        if now.minute % 5 != 0 or now.second > 10:
+            return None
+
         bar_time = self._get_bar_time(now)
 
+        # 避免重複記錄同一根 K 棒
         if self._last_bar_time == bar_time:
             return None
 
