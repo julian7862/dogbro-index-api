@@ -12,6 +12,7 @@ import pytest
 import sys
 import os
 from unittest.mock import Mock, MagicMock, patch, call
+from src.indicators.iv_calculator import IndicatorResult
 from src.services.market_data_service import MarketDataService
 
 
@@ -279,3 +280,72 @@ class TestMarketDataService:
         service._check_scheduled_restart()
         mock_exit.assert_not_called()
         service.stop.assert_not_called()
+
+    @patch('src.services.market_data_service.calc_indicator_for_bar')
+    @patch('src.services.market_data_service.calc_civ_from_option_quotes')
+    def test_on_new_kbar_emits_iv_indicator_with_extended_fields(
+        self,
+        mock_calc_civ,
+        mock_calc_indicator,
+        service,
+        mock_gateway_client
+    ):
+        """測試 _on_new_kbar 發送含完整欄位的 iv_indicator。"""
+        service._kbar_collector = Mock()
+        service._kbar_collector.get_bar_counts.return_value = {'TXO18000C': 20}
+        service._civ_history = Mock()
+        service._civ_history.get_history.return_value = ([20.0] * 19, [18000.0] * 19)
+        service._subscribed_strikes = [18000, 18100]
+        service._current_closing_index = 18000.0
+        service._calculate_dte = Mock(return_value=7)
+        service._calculate_valid_call_iv_count = Mock(return_value=2)
+
+        mock_calc_civ.return_value = 22.5
+        mock_calc_indicator.return_value = IndicatorResult(
+            civ=22.5,
+            civ_ma5=22.1,
+            civ_pb=40.0,
+            price_pb=66.0,
+            pb_minus_civ_pb=26.0,
+            signal=26.0,
+            timestamp='2026-03-27T09:30:00'
+        )
+
+        service._on_new_kbar({'TXO18000C': 100.0})
+
+        iv_calls = [
+            c for c in mock_gateway_client.emit.call_args_list
+            if c[0][0] == 'iv_indicator'
+        ]
+        assert len(iv_calls) == 1
+        payload = iv_calls[0][0][1]
+
+        assert payload['civ'] == 22.5
+        assert payload['civ_ma5'] == 22.1
+        assert payload['civ_pb'] == 40.0
+        assert payload['price_pb'] == 66.0
+        assert payload['pb_minus_civ_pb'] == 26.0
+        assert payload['signal'] == 26.0
+        assert payload['dte'] == 7
+        assert payload['valid_call_iv_count'] == 2
+        assert payload['current_dt'] == '2026-03-27T09:30:00'
+        assert payload['timestamp'] == '2026-03-27T09:30:00'
+
+    @patch('src.services.market_data_service.implied_volatility')
+    def test_calculate_valid_call_iv_count(self, mock_implied_volatility, service):
+        """測試 valid_call_iv_count 計算。"""
+        mock_implied_volatility.side_effect = [15.0, 0.0, 999.0, 20.0]
+
+        count = service._calculate_valid_call_iv_count(
+            bar_closes={
+                'TXO18000C6': 200.0,
+                'TXO18100C6': 120.0,
+                'TXO18200C6': 50.0,
+                'TXO18300C6': 90.0
+            },
+            strikes=[18000, 18100, 18200, 18300],
+            underlying_price=18050.0,
+            dte=7
+        )
+
+        assert count == 2

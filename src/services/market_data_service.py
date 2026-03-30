@@ -25,7 +25,12 @@ from src.utils.strike_calculator import calculate_call_strikes
 from src.utils.trading_hours import is_trading_hours, get_session_name, TW_TZ
 from src.indicators.kbar_collector import KBarCollector
 from src.indicators.civ_history import CIVHistory
-from src.indicators.iv_calculator import calc_civ_from_option_quotes, calc_indicator_for_bar
+from src.indicators.iv_calculator import (
+    calc_civ_from_option_quotes,
+    calc_indicator_for_bar,
+    build_strike_price_map,
+    implied_volatility,
+)
 
 
 # 設定 logging
@@ -604,6 +609,14 @@ class MarketDataService:
             logger.warning("無同步標的價格，跳過 IV 計算")
             return
 
+        # 若可計算，先統計有效 Call IV 筆數
+        valid_call_iv_count = self._calculate_valid_call_iv_count(
+            bar_closes=bar_closes,
+            strikes=self._subscribed_strikes,
+            underlying_price=underlying_price,
+            dte=dte,
+        )
+
         # 計算 CIV
         civ = calc_civ_from_option_quotes(
             bar_closes,
@@ -635,16 +648,51 @@ class MarketDataService:
 
         # 發送 IV 指標事件
         if result:
+            current_dt = result.timestamp
             self._gateway.emit('iv_indicator', {
                 'civ': result.civ,
+                'civ_ma5': result.civ_ma5,
                 'civ_pb': result.civ_pb,
                 'price_pb': result.price_pb,
+                'pb_minus_civ_pb': result.pb_minus_civ_pb,
+                'dte': dte,
+                'valid_call_iv_count': valid_call_iv_count,
+                'current_dt': current_dt,
                 'signal': result.signal,
                 'timestamp': result.timestamp
             })
             logger.info(f"發送 iv_indicator: CIV={result.civ*100:.2f}%, Signal={result.signal:.4f}")
         else:
             logger.info(f"歷史資料不足 ({len(civ_hist)+1}/20)，尚無法計算 Bollinger %b")
+
+    def _calculate_valid_call_iv_count(
+        self,
+        bar_closes: Dict[str, float],
+        strikes: List[int],
+        underlying_price: float,
+        dte: float,
+    ) -> Optional[int]:
+        """計算可用於 CIV 的有效 Call IV 筆數。"""
+        if not bar_closes or not strikes or underlying_price <= 0 or dte <= 0:
+            return None
+
+        try:
+            strike_price_map = build_strike_price_map(bar_closes)
+            valid_count = 0
+
+            for strike in strikes:
+                close = strike_price_map.get(strike)
+                if not close or close <= 0:
+                    continue
+
+                iv = implied_volatility(close, underlying_price, strike, dte)
+                if 0 < iv < 900:
+                    valid_count += 1
+
+            return valid_count
+        except Exception as e:
+            logger.warning(f"計算 valid_call_iv_count 失敗: {e}")
+            return None
 
     def _calculate_dte(self) -> float:
         """計算距到期天數（使用台灣時區）
