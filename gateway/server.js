@@ -33,6 +33,19 @@ const io = require("socket.io")(http, {
   }
 });
 
+const normalizeIVIndicatorPayload = (payload = {}) => ({
+  civ: payload.civ ?? null,
+  civ_ma5: payload.civ_ma5 ?? null,
+  civ_pb: payload.civ_pb ?? null,
+  price_pb: payload.price_pb ?? null,
+  pb_minus_civ_pb: payload.pb_minus_civ_pb ?? payload.signal ?? null,
+  signal: payload.signal ?? payload.pb_minus_civ_pb ?? null,
+  dte: payload.dte ?? null,
+  valid_call_iv_count: payload.valid_call_iv_count ?? null,
+  current_dt: payload.current_dt ?? payload.timestamp ?? null,
+  timestamp: payload.timestamp ?? payload.current_dt ?? null
+});
+
 // 儲存最新狀態
 let latestReadyStatus = null;
 let latestHeartbeat = null;
@@ -91,7 +104,8 @@ io.on("connection", (socket) => {
     } else if (event === 'kbar_close' && args[0]) {
       latestKbarClose = args[0];
     } else if (event === 'iv_indicator' && args[0]) {
-      latestIVIndicator = args[0];
+      latestIVIndicator = normalizeIVIndicatorPayload(args[0]);
+      args[0] = latestIVIndicator;
     }
 
     // 使用 io.emit 廣播給所有客戶端（包括發送者）
@@ -106,12 +120,14 @@ io.on("connection", (socket) => {
 /* =========================================================
  * 4. 伺服器啟動
  * ======================================================= */
-http.listen(PORT, () => {
-  console.log("=".repeat(60));
-  console.log(`[WebSocket Hub] 運行於 http://0.0.0.0:${PORT}`);
-  console.log(`[WebSocket Hub] Socket.IO 中繼已啟用`);
-  console.log("=".repeat(60));
-});
+if (require.main === module) {
+  http.listen(PORT, () => {
+    console.log("=".repeat(60));
+    console.log(`[WebSocket Hub] 運行於 http://0.0.0.0:${PORT}`);
+    console.log(`[WebSocket Hub] Socket.IO 中繼已啟用`);
+    console.log("=".repeat(60));
+  });
+}
 
 /* =========================================================
  * 5. 優雅關閉處理
@@ -124,5 +140,11 @@ const shutdown = (signal) => {
   });
 };
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+if (require.main === module) {
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+}
+
+module.exports = {
+  normalizeIVIndicatorPayload
+};
