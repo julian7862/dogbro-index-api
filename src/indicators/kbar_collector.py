@@ -88,6 +88,8 @@ class KBarCollector:
                 }}
             ]
 
+            latest_timestamp = None
+
             for doc in self._collection.aggregate(pipeline):
                 code = doc["contract_code"]
                 self._kbars[code] = deque(maxlen=self._max_bars)
@@ -99,7 +101,17 @@ class KBarCollector:
                         close=bar["close"]
                     ))
 
+                    # 追蹤最新的 K 棒時間戳
+                    if latest_timestamp is None or bar["timestamp"] > latest_timestamp:
+                        latest_timestamp = bar["timestamp"]
+
                 logger.info(f"載入 {code} 歷史 K 棒: {len(self._kbars[code])} 根")
+
+            # 恢復 _last_bar_time，避免重啟後重複記錄
+            if latest_timestamp:
+                self._last_bar_time = latest_timestamp
+                logger.info(f"恢復 _last_bar_time: {latest_timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+
         except Exception as e:
             logger.error(f"載入歷史 K 棒失敗: {e}")
 
