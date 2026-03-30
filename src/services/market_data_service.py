@@ -79,6 +79,7 @@ class MarketDataService:
 
         # 當前大台指數價格
         self._current_index_price: Optional[float] = None
+        self._index_futures_contracts: List = []
         self._price_lock = threading.Lock()
 
         # 排程重啟機制
@@ -291,6 +292,7 @@ class MarketDataService:
                             version=sj.constant.QuoteVersion.v1
                         )
                         subscribed_contracts.append(contract.code)
+                        self._index_futures_contracts.append(contract)
                         logger.info(f"✓ 已訂閱台指期貨 (Quote): {contract.code} - {contract.name} (到期: {contract.delivery_date})")
                     except Exception as e:
                         logger.warning(f"訂閱 {contract.code} 失敗: {e}")
@@ -306,6 +308,7 @@ class MarketDataService:
                         version=sj.constant.QuoteVersion.v1
                     )
                     subscribed_contracts.append(first_contract.code)
+                    self._index_futures_contracts.append(first_contract)
                     logger.info(f"✓ 已訂閱台指期貨 (Quote): {first_contract.code} - {first_contract.name}")
                 else:
                     logger.error("找不到任何可用的台指期貨合約")
@@ -429,12 +432,39 @@ class MarketDataService:
         # 這裡需要根據實際的 tick 結構來提取價格
         # 假設 tick 有 close 或 price 屬性
         try:
+            code = getattr(tick, 'code', '')
+            # 僅追蹤台指期貨，避免被 TXO 報價覆蓋造成時間基準錯位
+            if not str(code).startswith('TXF'):
+                return
+
             price = getattr(tick, 'close', None) or getattr(tick, 'price', None)
             if price and price > 0:
                 with self._price_lock:
                     self._current_index_price = float(price)
         except Exception as e:
             logger.debug(f"更新價格時發生錯誤: {e}")
+
+    def _get_synced_underlying_price(self) -> Optional[float]:
+        """取得與 5 分 K 同步的即時標的 close。
+
+        優先使用同一輪 snapshot 時間點抓到的台指期貨 close，
+        若抓取失敗再退回最新 quote/tick 的期貨價格。
+        """
+        api = self._shioaji.get_api()
+        if api and self._index_futures_contracts:
+            for contract in self._index_futures_contracts:
+                try:
+                    snapshot = api.snapshots([contract])
+                    if snapshot and hasattr(snapshot[0], 'close') and snapshot[0].close:
+                        price = float(snapshot[0].close)
+                        with self._price_lock:
+                            self._current_index_price = price
+                        return price
+                except Exception as e:
+                    logger.debug(f"抓取台指期貨 {contract.code} 快照失敗: {e}")
+
+        with self._price_lock:
+            return self._current_index_price
 
     def _start_snapshot_thread(self) -> None:
         """啟動快照輪詢執行緒"""
@@ -568,10 +598,10 @@ class MarketDataService:
             logger.warning("DTE <= 0，跳過 IV 計算")
             return
 
-        # 取得標的價格 (使用收盤指數)
-        underlying_price = self._current_closing_index
+        # 取得與本次 5 分 K 同步的標的價格
+        underlying_price = self._get_synced_underlying_price()
         if not underlying_price:
-            logger.warning("無收盤指數，跳過 IV 計算")
+            logger.warning("無同步標的價格，跳過 IV 計算")
             return
 
         # 計算 CIV
