@@ -65,8 +65,13 @@ class TestKBarCollector:
         dt3 = datetime(2026, 3, 20, 10, 59, 59)
         assert collector._get_bar_time(dt3) == datetime(2026, 3, 20, 10, 55, 0)
 
-    def test_check_and_record_bar_first_time(self):
+    @patch('src.indicators.kbar_collector.datetime')
+    def test_check_and_record_bar_first_time(self, mock_datetime):
         """首次記錄 K 棒"""
+        # Mock 時間為 5 分鐘邊界 (10:05:03)
+        mock_now = datetime(2026, 3, 20, 10, 5, 3)
+        mock_datetime.now.return_value = mock_now
+
         collector = KBarCollector(max_bars=20)
 
         collector.update_close('TXO22000D6', 500.0)
@@ -79,8 +84,13 @@ class TestKBarCollector:
         assert 'TXO22100D6' in result
         assert result['TXO22000D6'] == 500.0
 
-    def test_check_and_record_bar_same_minute(self):
+    @patch('src.indicators.kbar_collector.datetime')
+    def test_check_and_record_bar_same_minute(self, mock_datetime):
         """同一分鐘內不重複記錄"""
+        # Mock 時間為 5 分鐘邊界 (10:05:03)
+        mock_now = datetime(2026, 3, 20, 10, 5, 3)
+        mock_datetime.now.return_value = mock_now
+
         collector = KBarCollector(max_bars=20)
 
         collector.update_close('TXO22000D6', 500.0)
@@ -92,13 +102,17 @@ class TestKBarCollector:
 
         assert result is None
 
-    def test_get_closes(self):
+    @patch('src.indicators.kbar_collector.datetime')
+    def test_get_closes(self, mock_datetime):
         """取得歷史收盤價"""
+        # Mock 時間為 5 分鐘邊界 (10:05:03)
+        mock_now = datetime(2026, 3, 20, 10, 5, 3)
+        mock_datetime.now.return_value = mock_now
+
         collector = KBarCollector(max_bars=20)
 
         # 模擬記錄多根 K 棒
         collector.update_close('TXO22000D6', 500.0)
-        collector._last_bar_time = None  # 重置以允許記錄
         collector.check_and_record_bar()
 
         closes = collector.get_closes('TXO22000D6')
@@ -114,8 +128,13 @@ class TestKBarCollector:
 
         assert closes == []
 
-    def test_get_latest_bar_close(self):
+    @patch('src.indicators.kbar_collector.datetime')
+    def test_get_latest_bar_close(self, mock_datetime):
         """取得最新 K 棒收盤價"""
+        # Mock 時間為 5 分鐘邊界 (10:05:03)
+        mock_now = datetime(2026, 3, 20, 10, 5, 3)
+        mock_datetime.now.return_value = mock_now
+
         collector = KBarCollector(max_bars=20)
 
         collector.update_close('TXO22000D6', 500.0)
@@ -151,8 +170,13 @@ class TestKBarCollector:
         # 應該保留最新的 3 根
         assert closes == [102, 103, 104]
 
-    def test_get_all_latest_closes(self):
+    @patch('src.indicators.kbar_collector.datetime')
+    def test_get_all_latest_closes(self, mock_datetime):
         """取得所有合約的最新 K 棒收盤價"""
+        # Mock 時間為 5 分鐘邊界 (10:05:03)
+        mock_now = datetime(2026, 3, 20, 10, 5, 3)
+        mock_datetime.now.return_value = mock_now
+
         collector = KBarCollector(max_bars=20)
 
         collector.update_close('TXO22000D6', 500.0)

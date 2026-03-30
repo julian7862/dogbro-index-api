@@ -147,8 +147,9 @@ class TestMarketDataService:
 
     def test_update_current_price(self, service):
         """測試更新當前價格"""
-        # 模擬 tick 資料
+        # 模擬 tick 資料 (需要 TXF 開頭的 code 才會更新)
         tick = Mock()
+        tick.code = 'TXFD6'  # 台指期貨代碼
         tick.close = 18000.0
 
         service._update_current_price(tick)
@@ -291,14 +292,18 @@ class TestMarketDataService:
         mock_gateway_client
     ):
         """測試 _on_new_kbar 發送含完整欄位的 iv_indicator。"""
+        from datetime import datetime
+
         service._kbar_collector = Mock()
         service._kbar_collector.get_bar_counts.return_value = {'TXO18000C': 20}
+        service._kbar_collector.get_last_bar_time.return_value = datetime(2026, 3, 27, 9, 30, 0)
         service._civ_history = Mock()
         service._civ_history.get_history.return_value = ([20.0] * 19, [18000.0] * 19)
         service._subscribed_strikes = [18000, 18100]
         service._current_closing_index = 18000.0
         service._calculate_dte = Mock(return_value=7)
         service._calculate_valid_call_iv_count = Mock(return_value=2)
+        service._get_synced_underlying_price = Mock(return_value=18000.0)
 
         mock_calc_civ.return_value = 22.5
         mock_calc_indicator.return_value = IndicatorResult(
