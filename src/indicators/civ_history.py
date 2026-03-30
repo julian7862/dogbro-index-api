@@ -7,7 +7,7 @@
 """
 
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import os
 import logging
 
@@ -70,12 +70,13 @@ class CIVHistory:
         except Exception as e:
             logger.error(f"載入 CIV 歷史失敗: {e}")
 
-    def add(self, civ: float, price: float) -> None:
+    def add(self, civ: float, price: float, bar_time: Optional[datetime] = None) -> None:
         """新增一筆歷史
 
         Args:
-            civ: CIV 值
+            civ: CIV 值（百分比，例如 25.0 代表 25%）
             price: 標的價格
+            bar_time: K 棒對齊時間（台灣時區），None 則使用當前時間
         """
         self._civ_history.append(civ)
         self._price_history.append(price)
@@ -85,17 +86,34 @@ class CIVHistory:
             self._civ_history = self._civ_history[-self._max_history:]
             self._price_history = self._price_history[-self._max_history:]
 
-        # 存入 MongoDB
-        self._save(civ, price)
+        # 存入 MongoDB（使用 K 棒對齊時間）
+        self._save(civ, price, bar_time)
 
-    def _save(self, civ: float, price: float) -> None:
-        """儲存到 MongoDB"""
+    def _save(self, civ: float, price: float, bar_time: Optional[datetime] = None) -> None:
+        """儲存到 MongoDB
+
+        Args:
+            civ: CIV 值
+            price: 標的價格
+            bar_time: K 棒對齊時間，None 則使用當前時間
+        """
         if self._collection is None:
             return
 
         try:
+            from src.utils.trading_hours import TW_TZ
+
+            # 使用 K 棒對齊時間或當前台灣時間
+            if bar_time is None:
+                timestamp = datetime.now(TW_TZ)
+            elif bar_time.tzinfo is None:
+                # 若傳入的是 naive datetime，加上台灣時區
+                timestamp = TW_TZ.localize(bar_time)
+            else:
+                timestamp = bar_time
+
             self._collection.insert_one({
-                "timestamp": datetime.now(),
+                "timestamp": timestamp,  # timezone-aware datetime
                 "civ": civ,
                 "price": price
             })

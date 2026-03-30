@@ -42,6 +42,8 @@ const normalizeIVIndicatorPayload = (payload = {}) => ({
   signal: payload.signal ?? payload.pb_minus_civ_pb ?? null,
   dte: payload.dte ?? null,
   valid_call_iv_count: payload.valid_call_iv_count ?? null,
+  underlying_price: payload.underlying_price ?? null,
+  bar_time: payload.bar_time ?? null,
   current_dt: payload.current_dt ?? payload.timestamp ?? null,
   timestamp: payload.timestamp ?? payload.current_dt ?? null
 });

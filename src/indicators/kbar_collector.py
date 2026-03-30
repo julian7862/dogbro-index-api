@@ -164,6 +164,14 @@ class KBarCollector:
 
         return result if result else None
 
+    def get_last_bar_time(self) -> Optional[datetime]:
+        """取得最後一次記錄的 K 棒時間
+
+        Returns:
+            最後記錄的 K 棒時間（台灣時區），或 None
+        """
+        return self._last_bar_time
+
     def _get_bar_time(self, dt: datetime) -> datetime:
         """取得所屬的 5 分 K 時間"""
         minute = (dt.minute // 5) * 5

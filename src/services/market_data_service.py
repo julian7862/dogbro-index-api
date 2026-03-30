@@ -585,14 +585,18 @@ class MarketDataService:
         Args:
             bar_closes: {contract_code: close} 字典
         """
-        # 1. 發送 kbar_close 事件到前端 (含 bar counts)
+        # 取得 K 棒對齊時間
+        bar_time = self._kbar_collector.get_last_bar_time() if self._kbar_collector else datetime.now(TW_TZ)
+
+        # 1. 發送 kbar_close 事件到前端 (含 bar counts 和對齊時間)
         bar_counts = self._kbar_collector.get_bar_counts() if self._kbar_collector else {}
         self._gateway.emit('kbar_close', {
-            'timestamp': datetime.now().isoformat(),
+            'bar_time': bar_time.isoformat() if bar_time else None,
+            'timestamp': datetime.now(TW_TZ).isoformat(),
             'closes': bar_closes,
             'bar_counts': bar_counts
         })
-        logger.info(f"發送 kbar_close 事件: {len(bar_closes)} 個合約")
+        logger.info(f"發送 kbar_close 事件: {len(bar_closes)} 個合約, bar_time={bar_time.strftime('%H:%M:%S') if bar_time else 'N/A'}")
 
         # 2. 計算 IV 指標
         if not self._civ_history or not self._subscribed_strikes:
@@ -643,8 +647,8 @@ class MarketDataService:
             period=20
         )
 
-        # 儲存到 MongoDB (CIVHistory 會自動保留最近 50 筆)
-        self._civ_history.add(civ, underlying_price)
+        # 儲存到 MongoDB (傳入 K 棒對齊時間)
+        self._civ_history.add(civ, underlying_price, bar_time)
 
         # 發送 IV 指標事件
         if result:
@@ -657,11 +661,13 @@ class MarketDataService:
                 'pb_minus_civ_pb': result.pb_minus_civ_pb,
                 'dte': dte,
                 'valid_call_iv_count': valid_call_iv_count,
+                'underlying_price': underlying_price,
+                'bar_time': bar_time.isoformat() if bar_time else None,
                 'current_dt': current_dt,
                 'signal': result.signal,
                 'timestamp': result.timestamp
             })
-            logger.info(f"發送 iv_indicator: CIV={result.civ*100:.2f}%, Signal={result.signal:.4f}")
+            logger.info(f"發送 iv_indicator: CIV={result.civ*100:.2f}%, Price={underlying_price:.2f}, bar_time={bar_time.strftime('%H:%M:%S') if bar_time else 'N/A'}")
         else:
             logger.info(f"歷史資料不足 ({len(civ_hist)+1}/20)，尚無法計算 Bollinger %b")
 
