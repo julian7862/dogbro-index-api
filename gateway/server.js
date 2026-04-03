@@ -33,11 +33,28 @@ const io = require("socket.io")(http, {
   }
 });
 
+const normalizeIVIndicatorPayload = (payload = {}) => ({
+  civ: payload.civ ?? null,
+  civ_ma5: payload.civ_ma5 ?? null,
+  civ_pb: payload.civ_pb ?? null,
+  price_pb: payload.price_pb ?? null,
+  pb_minus_civ_pb: payload.pb_minus_civ_pb ?? payload.signal ?? null,
+  signal: payload.signal ?? payload.pb_minus_civ_pb ?? null,
+  dte: payload.dte ?? null,
+  valid_call_iv_count: payload.valid_call_iv_count ?? null,
+  underlying_price: payload.underlying_price ?? null,
+  bar_time: payload.bar_time ?? null,
+  current_dt: payload.current_dt ?? payload.timestamp ?? null,
+  timestamp: payload.timestamp ?? payload.current_dt ?? null
+});
+
 // 儲存最新狀態
 let latestReadyStatus = null;
 let latestHeartbeat = null;
 let latestOptionMetadata = null;
 let latestSnapshots = {}; // code -> snapshot data
+let latestKbarClose = null; // 最新 5 分 K 收盤
+let latestIVIndicator = null; // 最新 IV 指標
 
 io.on("connection", (socket) => {
   console.log(`[Socket] 客戶端已連線：${socket.id}`);
@@ -62,6 +79,16 @@ io.on("connection", (socket) => {
       socket.emit('market_snapshot', latestSnapshots[code]);
     });
   }
+  // 發送快取的 kbar_close
+  if (latestKbarClose) {
+    socket.emit('kbar_close', latestKbarClose);
+    console.log(`[發送快取] kbar_close 給 ${socket.id}`);
+  }
+  // 發送快取的 iv_indicator
+  if (latestIVIndicator) {
+    socket.emit('iv_indicator', latestIVIndicator);
+    console.log(`[發送快取] iv_indicator 給 ${socket.id}`);
+  }
 
   /* 轉送所有事件（廣播給所有客戶端） */
   socket.onAny((event, ...args) => {
@@ -76,6 +103,11 @@ io.on("connection", (socket) => {
       latestOptionMetadata = args[0];
     } else if (event === 'market_snapshot' && args[0]?.code) {
       latestSnapshots[args[0].code] = args[0];
+    } else if (event === 'kbar_close' && args[0]) {
+      latestKbarClose = args[0];
+    } else if (event === 'iv_indicator' && args[0]) {
+      latestIVIndicator = normalizeIVIndicatorPayload(args[0]);
+      args[0] = latestIVIndicator;
     }
 
     // 使用 io.emit 廣播給所有客戶端（包括發送者）
@@ -90,12 +122,14 @@ io.on("connection", (socket) => {
 /* =========================================================
  * 4. 伺服器啟動
  * ======================================================= */
-http.listen(PORT, () => {
-  console.log("=".repeat(60));
-  console.log(`[WebSocket Hub] 運行於 http://0.0.0.0:${PORT}`);
-  console.log(`[WebSocket Hub] Socket.IO 中繼已啟用`);
-  console.log("=".repeat(60));
-});
+if (require.main === module) {
+  http.listen(PORT, () => {
+    console.log("=".repeat(60));
+    console.log(`[WebSocket Hub] 運行於 http://0.0.0.0:${PORT}`);
+    console.log(`[WebSocket Hub] Socket.IO 中繼已啟用`);
+    console.log("=".repeat(60));
+  });
+}
 
 /* =========================================================
  * 5. 優雅關閉處理
@@ -108,5 +142,11 @@ const shutdown = (signal) => {
   });
 };
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+if (require.main === module) {
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+}
+
+module.exports = {
+  normalizeIVIndicatorPayload
+};

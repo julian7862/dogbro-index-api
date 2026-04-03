@@ -8,7 +8,7 @@
 
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
 import pytz
@@ -159,16 +159,56 @@ class MongoDBClient:
         return self._closing_index
 
     def get_expiration_date(self) -> Optional[str]:
-        """取得契約到期日
+        """取得契約到期日（含換約邏輯）
+
+        若已換約到下個月份，則計算新月份的到期日（第三個星期三）
 
         Returns:
-            契約到期日
+            契約到期日 (格式: YYYYMMDD)
         """
         if not self._expiration_date:
             if not self.fetch_market_parameters():
                 return None
 
+        # 檢查是否已換約
+        if self._should_use_next_month():
+            next_month = self._calculate_next_month(self._futures_month)
+            return self._calculate_expiration_date(next_month)
+
         return self._expiration_date
+
+    def _calculate_expiration_date(self, futures_month: str) -> str:
+        """計算指定月份的到期日
+
+        台灣期貨/選擇權到期日為每月第三個星期三
+
+        Args:
+            futures_month: 期貨月份 (格式: YYYYMM)
+
+        Returns:
+            到期日 (格式: YYYYMMDD)
+        """
+        try:
+            year = int(futures_month[:4])
+            month = int(futures_month[4:6])
+
+            # 找出該月第一天
+            first_day = datetime(year, month, 1)
+
+            # 找出第一個星期三 (weekday: Monday=0, Wednesday=2)
+            days_until_wed = (2 - first_day.weekday()) % 7
+            first_wed = first_day + timedelta(days=days_until_wed)
+
+            # 第三個星期三 = 第一個星期三 + 14 天
+            third_wed = first_wed + timedelta(days=14)
+
+            exp_date = third_wed.strftime("%Y%m%d")
+            logger.info(f"計算 {futures_month} 到期日: {exp_date}")
+            return exp_date
+
+        except Exception as e:
+            logger.error(f"計算到期日時發生錯誤: {e}")
+            return self._expiration_date or ""
 
     def _should_use_next_month(self) -> bool:
         """判斷是否應該使用下個月份
