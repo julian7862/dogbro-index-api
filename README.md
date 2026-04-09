@@ -50,9 +50,12 @@
 
 ```
 dogbro-index-api/
-├── main.py                      # 微服務入口點
+├── main.py                      # 即時服務入口點
+├── main_backtest.py             # 歷史回測 CLI 入口點
 ├── docker-compose.yml           # Docker Compose 編排
+├── docker-compose.test.yml      # 測試環境 Docker Compose
 ├── Dockerfile                   # Python 服務容器化配置
+├── Dockerfile.test              # 測試環境容器化配置
 ├── requirements.txt             # Python 依賴
 ├── pyproject.toml               # 專案設定
 ├── pytest.ini                   # 測試設定
@@ -72,6 +75,12 @@ dogbro-index-api/
 │   │   ├── contract_manager.py      # 合約管理器
 │   │   └── market_data_handler.py   # 市場資料處理器
 │   │
+│   ├── backtesting/             # 歷史回測模組
+│   │   ├── data_loader.py           # 歷史資料讀取器
+│   │   ├── dte_calculator.py        # DTE 到期日計算
+│   │   ├── backtest_runner.py       # 回測執行器
+│   │   └── result_store.py          # MongoDB 結果儲存
+│   │
 │   ├── gateway/                 # Socket.IO 客戶端
 │   │   └── gateway_client.py        # 與 Socket Hub 通訊
 │   │
@@ -87,7 +96,11 @@ dogbro-index-api/
     ├── test_market_data_service.py
     ├── test_shioaji_client.py
     ├── test_contract_manager.py
-    └── test_gateway_client.py
+    ├── test_gateway_client.py
+    ├── test_data_loader.py          # 資料讀取器測試
+    ├── test_dte_calculator.py       # DTE 計算測試
+    ├── test_backtest_runner.py      # 回測執行器測試
+    └── test_result_store.py         # 結果儲存測試
 ```
 
 ## 核心功能
@@ -673,6 +686,135 @@ _calculate_expiration_date(futures_month):
 - **熱啟動**: 重啟後從 MongoDB 載入歷史，若歷史足夠可立即輸出
 - **非交易時段**: 自動跳過，避免無意義資料
 - **時間對齊**: CIV 時間戳與 5 分 K 邊界對齊，誤差 < 10 秒
+
+---
+
+## 歷史回測系統
+
+### 概述
+
+歷史回測系統讓你能用過去的 CSV 資料計算 IV 指標，驗證指標在歷史行情中的表現。回測結果儲存至 MongoDB，方便後續分析。
+
+### 資料來源
+
+回測需要三種歷史 CSV 資料：
+
+| 資料類型 | 檔案格式 | 欄位 |
+|---------|---------|------|
+| TX 期貨 5 分 K | `tx_5min_kbar_YYYY_MM_DD.csv` | datetime, price |
+| TXO 選擇權 5 分 K | `5min_kbar_YYYY_MM_DD.csv` | datetime, strike, price |
+| TAIEX 收盤指數 | `TAIEX_HIST_MM.csv` | 日期(民國年), 收盤指數 |
+
+### 使用方式
+
+```bash
+python main_backtest.py \
+  --tx-path /path/to/tx_5min_kbar \
+  --txo-path /path/to/txo_5min_kbar \
+  --taiex-path /path/to/TAIEX_HIST \
+  --start 2026-02-10 \
+  --end 2026-03-31 \
+  --collection backtest_results
+```
+
+### 參數說明
+
+| 參數 | 必要 | 說明 |
+|------|------|------|
+| `--tx-path` | 是 | TX 期貨 5 分 K 資料夾路徑 |
+| `--txo-path` | 是 | TXO 選擇權 5 分 K 資料夾路徑 |
+| `--taiex-path` | 是 | TAIEX 收盤指數資料夾路徑 |
+| `--start` | 是 | 回測開始日期 (YYYY-MM-DD) |
+| `--end` | 是 | 回測結束日期 (YYYY-MM-DD) |
+| `--collection` | 否 | MongoDB collection 名稱 (預設: backtest_results) |
+| `--mongo-uri` | 否 | MongoDB 連線字串 (預設: 從 MONGO_URI 環境變數) |
+
+### 回測流程
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        回測執行流程                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. 讀取前一日 TAIEX 收盤指數                                    │
+│                 ↓                                               │
+│  2. 計算 17 檔履約價 (ATM ± 8)                                   │
+│                 ↓                                               │
+│  3. 載入當日 TX/TXO 5 分 K 資料                                  │
+│                 ↓                                               │
+│  4. 對每根 K 棒:                                                 │
+│     ├── 取得期貨價格 (underlying)                               │
+│     ├── 取得 17 檔選擇權收盤價                                   │
+│     ├── 計算 CIV (複用 iv_calculator.py)                        │
+│     ├── 計算 Bollinger %b 和 Signal                             │
+│     └── 累積到結果列表                                          │
+│                 ↓                                               │
+│  5. 批次儲存到 MongoDB                                          │
+│                 ↓                                               │
+│  6. 輸出摘要 (處理天數、總筆數、耗時)                            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### MongoDB 結果結構
+
+```javascript
+// backtest_results collection
+{
+  "datetime": ISODate("2026-02-10T09:35:00+08:00"),
+  "date": "2026-02-10",
+  "underlying_price": 32605.0,
+  "civ": 25.3,
+  "civ_ma5": 24.8,        // 前 5 根不足時為 null
+  "civ_pb": 45.2,         // 前 20 根不足時為 null
+  "price_pb": 38.7,
+  "pb_minus_civ_pb": -6.5,
+  "dte": 13,
+  "valid_iv_count": 14
+}
+```
+
+### DTE 到期日設定
+
+目前使用寫死的到期日（可在 `src/backtesting/dte_calculator.py` 修改）：
+
+| 合約月份 | 到期日 |
+|---------|--------|
+| 2026 年 2 月 | 2026-02-23 |
+| 2026 年 3 月 | 2026-03-18 |
+| 2026 年 4 月 | 2026-04-15 |
+
+### 與即時系統的一致性
+
+回測系統直接複用即時系統的計算模組：
+
+- `src/indicators/iv_calculator.py` - CIV 和 Bollinger %b 計算
+- `src/utils/strike_calculator.py` - 履約價計算
+
+確保回測結果與即時系統完全一致。
+
+---
+
+## Docker 測試環境
+
+### 使用 Docker 執行測試
+
+```bash
+# 執行所有測試
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
+
+# 執行特定測試檔案
+docker compose -f docker-compose.test.yml run test-runner pytest tests/test_iv_calculator.py -v
+
+# 執行符合名稱的測試
+docker compose -f docker-compose.test.yml run test-runner pytest -k "test_bollinger" -v
+```
+
+### 測試覆蓋率
+
+測試完成後，覆蓋率報告會產生在：
+- `htmlcov/` - HTML 格式報告
+- `.coverage` - 原始覆蓋率資料
 
 ---
 
