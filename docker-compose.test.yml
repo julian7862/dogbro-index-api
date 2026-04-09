@@ -1,0 +1,23 @@
+version: '3.8'
+
+# E2E Test Configuration
+# Usage: docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
+
+services:
+  # Test Runner
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: test-runner
+    environment:
+      - TZ=Asia/Taipei
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Mount test results for coverage report
+      - ./htmlcov:/app/htmlcov
+      - ./.coverage:/app/.coverage
+    # Run all tests by default, can override with command
+    # Examples:
+    #   docker compose -f docker-compose.test.yml run test-runner pytest tests/test_iv_calculator.py -v
+    #   docker compose -f docker-compose.test.yml run test-runner pytest -k "test_zero_volatility" -v
