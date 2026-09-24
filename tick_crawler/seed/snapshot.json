@@ -1,0 +1,22 @@
+{
+  "created_at": "2026-09-24T07:06:09.279398+00:00",
+  "plan": {
+    "start": "2026-03-01",
+    "end": "2026-09-24",
+    "trading_days": 144,
+    "stocks": 1978,
+    "universe_scope": "current listed securities, not a point-in-time historical universe"
+  },
+  "jobs": {
+    "listing_history_unverified": 2999,
+    "pending": 281833
+  },
+  "stored_ticks": 0,
+  "database_sha256": "6c9dd8f78eb98b32464f5044100ef706cc4d82f6fba7ed021e53014fd9ef7a76",
+  "excluded": [
+    "credentials",
+    "CA",
+    "usage_history",
+    "tick_data"
+  ]
+}

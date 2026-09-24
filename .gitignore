@@ -30,6 +30,7 @@ build/
 
 # Cache
 .cache/
+data/historical_ticks/
 
 # Node.js
 gateway/node_modules/

@@ -1,0 +1,5 @@
+# Versions used by the verified live API tests. Python 3.12 or 3.13.
+shioaji==1.3.2
+python-dotenv==1.2.2
+# Required by zoneinfo on machines without a system IANA timezone database.
+tzdata>=2025.2,<2027

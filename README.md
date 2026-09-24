@@ -829,3 +829,12 @@ MIT License
 3. Commit your changes
 4. Push to the branch
 5. Create a Pull Request
+
+## 歷史股票 Tick 下載
+
+2026/03/01～2026/09/24 上市／上櫃普通股的盤後分批下載工具：
+[使用方式、外接硬碟、流量預算與完整性限制](docs/HISTORICAL_TICKS.md)。
+入口為 `download_ticks.py`，獨立於即時服務，支援進度保存及斷點續跑。
+
+搬到新 Mac 請使用 [獨立 tick_crawler 套件](tick_crawler/README.md)：包含 venv 安裝步驟、
+下載程式、股票清單與初始進度快照。GitHub 版本不包含 API 金鑰或 CA。

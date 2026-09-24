@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+data/historical_ticks/
+*.log
+*.pfx
+*.p12
+*.pem
+*.key
+*.crt
+*.cer

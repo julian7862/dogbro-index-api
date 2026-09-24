@@ -1,0 +1,56 @@
+{
+  "year": 2026,
+  "timezone": "Asia/Taipei",
+  "verified_at": "2026-09-24",
+  "sources": [
+    {
+      "title": "TWSE 115 年市場開休市日期",
+      "url": "https://www.twse.com.tw/holidaySchedule/holidaySchedule?response=html",
+      "scope": "2026 scheduled non-trading dates; dates labelled first/last trading day are excluded"
+    },
+    {
+      "title": "證券商公會 115 年 7 月 10 日巴威颱風集中市場休市公告",
+      "url": "https://www.twsa.org.tw/F01/F011.html",
+      "scope": "2026-07-10 unscheduled full-market closure"
+    },
+    {
+      "title": "TPEx 115 年 4 月 3 日及 4 月 6 日休市公告",
+      "url": "https://www.tpex.org.tw/storage/eb_data/11503/11503007121.html",
+      "scope": "corroboration of OTC April holidays"
+    }
+  ],
+  "closed_dates": [
+    "2026-01-01",
+    "2026-02-12",
+    "2026-02-13",
+    "2026-02-15",
+    "2026-02-16",
+    "2026-02-17",
+    "2026-02-18",
+    "2026-02-19",
+    "2026-02-20",
+    "2026-02-27",
+    "2026-02-28",
+    "2026-04-03",
+    "2026-04-04",
+    "2026-04-05",
+    "2026-04-06",
+    "2026-05-01",
+    "2026-06-19",
+    "2026-07-10",
+    "2026-09-25",
+    "2026-09-28",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-25",
+    "2026-10-26",
+    "2026-12-25"
+  ],
+  "notes": [
+    "Exclude Saturdays and Sundays separately; this list is not an exhaustive list of weekend dates.",
+    "Scheduled closures cover calendar year 2026. Exceptional closures are a reference snapshot as of 2026-09-24 and must be reviewed before extending a backfill beyond that date.",
+    "2026-02-12 and 2026-02-13 are settlement-only days and have no exchange trading.",
+    "The published annual TWSE schedule alone omits the 2026-07-10 typhoon closure; it is included using the securities association's public announcements.",
+    "Local weather-related office closures do not necessarily close the whole market; do not infer market closure from a county office closure alone."
+  ]
+}

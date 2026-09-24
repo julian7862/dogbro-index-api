@@ -1,0 +1,37 @@
+{
+  "version": "2026.09.24.1",
+  "snapshot": {
+    "start": "2026-03-01",
+    "end": "2026-09-24",
+    "trading_days": 144,
+    "stocks": 1978,
+    "universe_scope": "current listed securities, not a point-in-time historical universe"
+  },
+  "sha256": {
+    ".env.example": "140744e51050fc87213a07b63ee46eb41f124442704f464837509655df56b903",
+    ".gitignore": "d66b140ca3c8debd2521daa89e05e76326cd5c2646ce61e77049d154c4083b1e",
+    "README.md": "73d7c3ba819d5b23f07a1a49eeac5cf8b607958eb1d48a3acc8ddb036fd2df30",
+    "data/reference/twse_holidays_2026.json": "e230c659036fd820f879323001a6ca38b9595c60666078a99bb41a10d95b8352",
+    "docs/HISTORICAL_TICKS.md": "71badb966238f646d4d9ca62bb0b4c9c7d9e8aae698be49e5b3ea7afa4fcad20",
+    "docs/TICK_STORAGE_CAPACITY_PLAN.md": "a2128035aaa015ea34eb71a46148c3821d9e430925a1f78accf98775d2fc3588",
+    "download_ticks.py": "b5308c81efc323e31ebffaa0e55d9439624bc4711e18e547adf5e7d610d4eca3",
+    "prepare.py": "3f73c28a1bf6eda6de7228306555bddd9c2ad9eb71422e4c89304a1d336746aa",
+    "pytest.ini": "d5e4dadbf1fb32fbfd66522a009348bb6860078318f48d576b62c35509f5a52c",
+    "requirements-analysis.txt": "7df7b9d45518e89348e93c3fb3db37c8cdda2b79e39c27a8f0e7eaa0359fbe3c",
+    "requirements-dev.txt": "8636f9ab1a075be9f3039e2a6471837259c4f36b625bcaf7a3d9a1edd2419c6d",
+    "requirements.txt": "39c39461e47c9b804d0a7ca6040600b3d48383c1e0c87361ccf4f8e0d5bcc146",
+    "seed/manifest.sqlite3.gz": "6ef982cc9f2b4a0f9d2fd1fcc31761ec682395121b3e310b0b163dcdd649c273",
+    "seed/snapshot.json": "58525f864fa733244f17a654a031e411ba955738587c55885fe5530133f46725",
+    "seed/universe.json": "17c6112c87931439d0d0edfe41085450ba6327a63b9dda6ad201510d25244fa7",
+    "src/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/data/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/data/equity_universe.py": "56eba5b2bb119019c00f4bb0b5aad1abb437f7ccf53cbaea6595e5aa00ff1598",
+    "src/data/shioaji_history.py": "ab28564b0684fe89322b637937013a8f833749cd3302bc608f0e68d475897a49",
+    "src/data/tick_archive.py": "24a51027c30d5f9238de24ba734686028d51d98f31f4e239cd52304596b096c6",
+    "tests/test_download_ticks.py": "a1250bb7ee9c19b7c06c0bf97756d98f3893139a6493a6e3d4b9970771d27e85",
+    "tests/test_equity_universe.py": "aca2616a95ed4da5dafe516365040975b3ae4eb9cef1a653557f9a98a8b88375",
+    "tests/test_prepare.py": "05e1bc767990c2ef6a06b4d4ec23d01a8d5e49fb29ec15bc77dbd380737ef440",
+    "tests/test_shioaji_history.py": "4babf00646486356e90688c6642cd7b92c5ec1efdf5e29fd5c09b4879e139acb",
+    "tests/test_tick_archive.py": "55cb157f7af1769d72efbdf846446727acc32c894620d7dc6b7460f94284ef47"
+  }
+}
